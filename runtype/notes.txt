@@ -1,0 +1,68 @@
+An attempt at a comprehensive description of the sound types in typescript
+This is only for fully realized types, i.e. types with no generic parameters
+
+	never - bottom type, subtype of all types
+	unknown	- top type, supertype of all types
+		primitive types
+			number
+				numeric literal (singleton)
+				- Additional values with no associated literal
+					Infinity, -Infinity, NaN
+			boolean
+				true (singleton)
+				false (singleton)
+		object types
+		union types
+		intersection types
+
+	<...>   Type without a single associated identifier
+	(...)   Comment on type
+	=       Union of listed subtypes is equivalent to supertype
+	V       Union of listed subtypes does not include all values of supertype
+
+unknown
+ |
+ |______________________________________________         
+ |                      |                      |         
+ |                      |                      |         
+{ }                    undefined              null       
+ |                    (singleton)            (singleton) 
+ |                                                       
+ |                                                       
+ V                                                       
+ |                                                       
+Object                                                   
+ |                                                       
+ V                                                       
+ |____________________________________________________________________________________________________________________________________________
+ |                   |                   |                   |                         |                          |                          |
+ |                   |                   |                   |                         |                          |                          |
+String              Number              BigInt              Boolean                   Symbol                     Array(T < unknown)         Function
+ |                   |                   |                   |                         |                          |                          |
+ V                   V                   V                   V                         V                          V                          |
+ | <prim>            | <prim>            | <prim>            | <prim>                  | <prim>                   |                          |
+ |  |                |  |                |  |                |  |                      |  |                      <tuple type (...U < T)>     |
+string              number              bigint              boolean                   symbol                      |                          |
+ |                  (also includes)      |                   |                         |                          |                          |
+ |                  ( * Infinity  )      |                   |                         |                          |                          |
+ |                  ( * -Infinity )      |                   |                         |                          |                          |
+ |                  ( * NaN       )      |                   |                         |                          |                          |
+ |                   |                   |                   =                         |                          |                          |
+ =                   V                   =                   |_____________            =                          |                          |
+ |                   |                   |                   |            |            |                          |                          |
+<literal>           <literal>           <literal>           true         false        <unique symbol literal>     |                          |
+(singleton)         (singleton)         (singleton)         (singleton)  (singleton)  (a specific realization)    |                          |
+                                                                                      (cannot be re-expressed)    |                          |
+                         
+
+Object type literal   { ... }
+	
+	Assigning to, supertype check
+		behaves as an object with the specified properties
+		ALL unspecified properties, including properties on Object, typed as optional and of type unknown
+		note that in some contexts you cannot assign to non-specified properties, they are effectively typed as optional and of type never
+	
+	Assigning from, subtype check
+		behaves as an object with the specified properties; any properties not specified but present on Object inherit their type from Object
+		any other unspecified property is typed as optional and of type unknown
+		
