@@ -1023,7 +1023,7 @@ function getObjectKeyTypes(type: ObjectType) {
 	return types;
 }
 
-export function getBoxedType(type: Runtype) {
+export function getBoxedPrimitive(type: Runtype) {
 	if (type.kind === RuntypeKind.String) {
 		return getGlobalType("String");
 	}
@@ -1073,7 +1073,7 @@ export function createKeyOfType(type: Runtype): Runtype {
 	}
 
 	// For keyof types we defer primitives to their boxed versions
-	const boxed = getBoxedType(type);
+	const boxed = getBoxedPrimitive(type);
 	if (boxed) {
 		type = boxed;
 	}
@@ -1107,7 +1107,41 @@ export function createKeyOfType(type: Runtype): Runtype {
 	throw new Error(`Unrecognized runtype; kind is ${type.kind}`);
 }
 
-function createAccessTypeWithPrimitiveKey(type: Runtype, key: string | number) {
+
+function isValidAccessKeyType(keyType: Runtype) {
+	if (
+		keyType.kind === RuntypeKind.Never ||
+		keyType.kind === RuntypeKind.String ||
+		keyType.kind === RuntypeKind.Number ||
+		keyType.kind === RuntypeKind.StringLiteral ||
+		keyType.kind === RuntypeKind.NumberLiteral
+		// TODO: symbol
+	) {
+		return true;
+	}
+
+	if (keyType.kind === RuntypeKind.Union) {
+		for (const unionType of (keyType as UnionType).types) {
+			if (!isValidAccessKeyType(unionType)) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	if (keyType.kind === RuntypeKind.Intersection) {
+		for (const intersectionType of (keyType as IntersectionType).types) {
+			if (isValidAccessKeyType(intersectionType)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	return false;
+}
+
+function createAccessTypeWithLiteralKey(type: Runtype, key: string | number): Runtype {
 	// TODO: unique symbols
 	if (type.kind === RuntypeKind.Object) {
 		for (const { key: propertyKey, value } of (type as ObjectType).properties) {
@@ -1115,50 +1149,125 @@ function createAccessTypeWithPrimitiveKey(type: Runtype, key: string | number) {
 			if (typeof key === "symbol") {
 				continue;
 			}
-
 			if (key.toString() === propertyKey.toString()) {
 				return value;
 			}
 		}
 
 		if (typeof key === "number" && (type as ObjectType).indexNumber) {
-			return (type as ObjectType).indexNumber;
+			return (type as ObjectType).indexNumber!;
 		}
-
 		if ((type as ObjectType).indexString) {
-			return (type as ObjectType).indexString;
+			return (type as ObjectType).indexString!;
 		}
 
 		// TODO: error type
 		throw new Error(`Invalid key for access type: ${key}`);
 	}
+
+	if (type.kind === RuntypeKind.Union) {
+		return createUnionType((type as UnionType).types.map(t => createAccessTypeWithLiteralKey(t, key)));
+	}
+	if (type.kind === RuntypeKind.Intersection) {
+		return createIntersectionType((type as IntersectionType).types.map(t => createAccessTypeWithLiteralKey(t, key)));
+	}
+
+	throw new Error(`Unrecognized access type; kind is ${type.kind}`);
+}
+
+function createAccessTypeWithStringKey(type: Runtype): Runtype {
+	if (type.kind === RuntypeKind.Object) {
+		if ((type as ObjectType).indexString) {
+			return (type as ObjectType).indexString!;
+		}
+		throw new Error("Access type has no string index signature");
+	}
+
+	if (type.kind === RuntypeKind.Union) {
+		return createUnionType((type as UnionType).types.map(createAccessTypeWithStringKey));
+	}
+	if (type.kind === RuntypeKind.Intersection) {
+		return createIntersectionType((type as IntersectionType).types.map(createAccessTypeWithStringKey));
+	}
+
+	throw new Error(`Unrecognized access type; kind is ${type.kind}`);
+}
+
+function createAccessTypeWithNumberKey(type: Runtype): Runtype {
+	if (type.kind === RuntypeKind.Object) {
+		if ((type as ObjectType).indexNumber) {
+			return (type as ObjectType).indexNumber!;
+		}
+		if ((type as ObjectType).indexString) {
+			return (type as ObjectType).indexString!;
+		}
+		throw new Error("Access type has no string or number index signature");
+	}
+
+	if (type.kind === RuntypeKind.Union) {
+		return createUnionType((type as UnionType).types.map(createAccessTypeWithStringKey));
+	}
+	if (type.kind === RuntypeKind.Intersection) {
+		return createIntersectionType((type as IntersectionType).types.map(createAccessTypeWithStringKey));
+	}
+
+	throw new Error(`Unrecognized access type; kind is ${type.kind}`);
+
+}
+
+function createAccessTypeHelper(type: Runtype, keyType: Runtype): Runtype {
+	if (keyType.kind === RuntypeKind.Never) {
+		return createNeverType();
+	}
+
+	if (type.kind === RuntypeKind.Never) {
+		return createNeverType();
+	}
+	if (type.kind === RuntypeKind.Any) {
+		return createAnyType();
+	}
+	if (
+		type.kind === RuntypeKind.Undefined ||
+		type.kind === RuntypeKind.Null ||
+		type.kind === RuntypeKind.NonPrimitive ||
+		type.kind === RuntypeKind.Void ||
+		type.kind === RuntypeKind.Unknown
+	) {
+		throw new Error("Invalid key for access type");
+	}
+
+	if (
+		keyType.kind === RuntypeKind.StringLiteral ||
+		keyType.kind === RuntypeKind.NumberLiteral
+	) {
+		return createAccessTypeWithLiteralKey(type, (keyType as StringLiteralType | NumberLiteralType).literal);
+	}
+	if (keyType.kind === RuntypeKind.String) {
+		return createAccessTypeWithStringKey(type);
+	}
+	if (keyType.kind === RuntypeKind.Number) {
+		return createAccessTypeWithNumberKey(type);
+	}
+
+	if (keyType.kind === RuntypeKind.Union) {
+		return createUnionType((keyType as UnionType).types.map(t => createAccessTypeHelper(type, t)));
+	}
+	if (keyType.kind === RuntypeKind.Intersection) {
+		return createIntersectionType((keyType as IntersectionType).types.map(t => createAccessTypeHelper(type, t)));
+	}
+
+	throw new Error("Invalid access key type");
 }
 
 export function createAccessType(type: Runtype, keyType: Runtype) {
-	type test = { [key: number]: string, b: string };
-	type r = test["0"];
-
-	if (
-		keyType.kind === RuntypeKind.Any ||
-		keyType.kind === RuntypeKind.Unknown ||
-		keyType.kind === RuntypeKind.Void ||
-		keyType.kind === RuntypeKind.Undefined ||
-		keyType.kind === RuntypeKind.Null ||
-		keyType.kind === RuntypeKind.NonPrimitive
-	) {
+	if (!isValidAccessKeyType(keyType)) {
 		// TODO: error type;
 		throw new Error("Invalid key type for access type");
 	}
-
 	// For access types we defer primitives to their boxed versions
-	const boxed = getBoxedType(type);
+	const boxed = getBoxedPrimitive(type);
 	if (boxed) {
 		type = boxed;
 	}
-	
-	if (type.kind === RuntypeKind.Object) {
-		for (const { name, optional, value } of (type as ObjectType).properties) {
-			
-		}
-	}
+	return createAccessTypeHelper(type, keyType);
 }
