@@ -24,39 +24,22 @@ export enum RuntypeKind {
 	Tuple,
 	Union,
 	Intersection,
-	
-	PropertyOf,
-	ArrayElementOf,
-	TupleElementOf,
-	Function,
-	Mapped,
-	Conditional,
-	ParameterOf,
-	ReturnOf,
 }
 
 // TODO:
+// arrays as objects
 // unique symbols
 // Function,
-// Mapped,
+// Mapped + InferType
 // Conditional,
-// PropertyOf,
 // ParameterOf,
 // ReturnOf,
-// ArrayElementOf,
-// TupleElementOf,
 // TypeQuery (typeof)
 // ThisType
-// InferType
-
-// OptionalType (there is an OptionalTypeNode, but it seems it's Type is always a different Type)
-
 // RestType,
 // ImportType
-
+// OptionalType? (there is an OptionalTypeNode, but it seems it's Type is always a different Type)
 // JSDoc types?
-
-// TypeKeyword vs TypeOperator?
 
 export abstract class Runtype {
 	public readonly kind: RuntypeKind;
@@ -996,33 +979,6 @@ export function getGlobalType(name: string) {
 	return result;
 }
 
-function getObjectKeyTypes(type: ObjectType) {
-	// TODO: add unique symbols
-	
-	if (type.indexString) {
-		return [ createStringType(), createNumberType() ];
-	}
-
-	const types: Runtype[] = [];
-	for (const property of type.properties) {
-		if (typeof property.key === "string") {
-			types.push(createStringLiteralType(property.key));
-		}
-		else if (typeof property.key === "number") {
-			types.push(createNumberLiteralType(property.key));
-		}
-		else {
-			// TODO: unique symbols
-			throw Error("unique symbols not implemented");
-		}
-	}
-	if (type.indexNumber) {
-		types.push(createNumberType());
-	}
-
-	return types;
-}
-
 export function getBoxedPrimitive(type: Runtype) {
 	if (type.kind === RuntypeKind.String) {
 		return getGlobalType("String");
@@ -1052,6 +1008,37 @@ export function getBoxedPrimitive(type: Runtype) {
 		return getGlobalType("BigInt");
 	}
 	return undefined;
+}
+
+/*---------*\
+| KeyOfType |
+\*---------*/
+
+function getObjectKeyTypes(type: ObjectType) {
+	// TODO: add unique symbols
+	
+	if (type.indexString) {
+		return [ createStringType(), createNumberType() ];
+	}
+
+	const types: Runtype[] = [];
+	for (const property of type.properties) {
+		if (typeof property.key === "string") {
+			types.push(createStringLiteralType(property.key));
+		}
+		else if (typeof property.key === "number") {
+			types.push(createNumberLiteralType(property.key));
+		}
+		else {
+			// TODO: unique symbols
+			throw Error("unique symbols not implemented");
+		}
+	}
+	if (type.indexNumber) {
+		types.push(createNumberType());
+	}
+
+	return types;
 }
 
 export function createKeyOfType(type: Runtype): Runtype {
@@ -1107,6 +1094,9 @@ export function createKeyOfType(type: Runtype): Runtype {
 	throw new Error(`Unrecognized runtype; kind is ${type.kind}`);
 }
 
+/*----------*\
+| AccessType |
+\*----------*/
 
 function isValidAccessKeyType(keyType: Runtype) {
 	if (

@@ -1,11 +1,16 @@
 import { runtypeOf, Runtype } from "runtype";
 
+function resolveTypeParameters<Resolve extends ( <TypeParams>()=>unknown )>(...typeArgs: Runtype[]): Runtype {
+	return null as any;
+}
+
+resolveTypeParameters<( <Arg0>() => Array<Arg0> )>(null as any);
 
 export let __runtime = {
 	type_params: [],
 	invoked_function: undefined,
-	global_runtypes: new Map<string, Runtype>([
-		[ "Array",  runtypeOf<Array<unknown>>() ],
+	global_runtypes: new Map<string, (...typeParams: Runtype[])=>Runtype>([
+		[ "Array", runtypeOf<T, Array<T>>() ],
 		[ "ArrayBuffer",  runtypeOf<ArrayBuffer>() ],
 		[ "Boolean",  runtypeOf<Boolean>() ],
 		[ "Buffer",  runtypeOf<Buffer>() ],
