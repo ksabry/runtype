@@ -454,7 +454,7 @@ class NonPrimitiveType implements RuntypeBase {
 	}
 	
 	public validate(value: unknown): ValidationResult {
-		if (typeof value === "object" && value !== null) {
+		if ((typeof value === "object" || typeof value === "function") && value !== null) {
 			return { valid: true, error: null };
 		}
 		else {
@@ -561,13 +561,14 @@ class BigIntLiteralType implements RuntypeBase {
 }
 
 type ObjectPropertiesReadonly = {
-	readonly key: string | number | symbol;
+	readonly key: string;
 	readonly value: RuntypeBase;
 	readonly optional: boolean;
 }[];
 
 type ObjectProperties = {
-	key: string | number | symbol;
+	// escaped name, always string
+	key: string;
 	value: RuntypeBase;
 	optional: boolean;
 }[];
@@ -606,15 +607,17 @@ class ObjectType implements RuntypeBase {
 	}
 
 	public validate(value: unknown): ValidationResult {
-		if (typeof value !== "object" || value === null) {
+		if ((typeof value !== "object" && typeof value !== "function") || value === null) {
 			return { valid: false, error: new InvalidValueError(value, this) };
 		}
 
 		let valid = true;
 		const errors: ValidationError[] = [];
-		const visitedProperties = new Set<string | number | symbol>();
+		const visitedProperties = new Set<string>();
 
 		for (const { key, value: valueType, optional } of this.properties) {
+			// TODO: we need to convert value symbol properties to their escaped names
+			// perhaps we retain a global map to unescape these
 			// TODO: we may want to check non-enumerable properties
 			if (!(key in value)) {
 				if (!optional) {
@@ -625,6 +628,12 @@ class ObjectType implements RuntypeBase {
 				continue;
 			}
 			
+			// console.log("----------------------");
+			// console.log(value);
+			// console.log(key);
+			// console.log((value as any)[key]);
+			// console.log(valueType.kind);
+
 			visitedProperties.add(key);
 			const propertyValidation = valueType.validate((value as any)[key]);
 			

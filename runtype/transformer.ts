@@ -16,6 +16,12 @@ import path from "path";
 //  set to a default __next_type_params after using them so if the function is called without it being set (such as from pure js) it still behaves reasonably
 
 function flagStrings(flags: number, enumClass: any) {
+	for (const key in enumClass) {
+		if (flags === enumClass[key]) {
+			return [ key ];
+		}
+	}
+
 	const result: string[] = [];
 	for (const key in enumClass) {
 		if (flags & enumClass[key]) {
@@ -23,7 +29,7 @@ function flagStrings(flags: number, enumClass: any) {
 			flags &= ~enumClass[key];
 		}
 	}
-	return result;
+	return [ ...result, flags ];
 }
 
 function runtypeTransformer(checker: ts.TypeChecker) {
@@ -181,10 +187,13 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 		function createRuntypeObject(type: ts.Type) {
 			const runtypeProperties: ts.Expression[] = [];
 
+			// TODO: augmented?
 			for (const property of checker.getPropertiesOfType(type)) {
-				const propertyKey = ts.createStringLiteral(property.getName());
+				console.log(property.getEscapedName());
+
+				const propertyKey = ts.createStringLiteral(property.getEscapedName() as string);
 				const propertyValue = createRuntypeExpressionFromType(checker.getTypeAtLocation(property.valueDeclaration));
-				const propertyOptional = (property.valueDeclaration as ts.PropertyDeclaration).questionToken ? ts.createTrue() : ts.createFalse();
+				const propertyOptional = (property.valueDeclaration as ts.PropertyDeclaration)?.questionToken ? ts.createTrue() : ts.createFalse();
 				// TODO: readonly
 
 				runtypeProperties.push(
@@ -218,8 +227,6 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 		}
 
 		function createRuntypeExpressionFromType(type: ts.Type): ts.Expression {
-			console.log(flagStrings(type.flags, ts.TypeFlags));
-			
 			if (type.flags & ts.TypeFlags.Never) {
 				return createRuntypeNever();
 			}
