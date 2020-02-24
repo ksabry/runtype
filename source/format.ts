@@ -23,5 +23,5 @@ function checkType<T>(value: unknown) {
 }
 
 // checkType<{ a: string, b: string, c: string }>({ b: 10 });
-checkType<string[]>([ "a", "b", "c", 1 ]);
+checkType<{ a: string; b?: number }>({ a: "test", b: "" });
 

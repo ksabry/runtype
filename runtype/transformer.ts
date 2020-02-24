@@ -1,4 +1,4 @@
-import ts, { TypeFlags, createBigIntLiteral } from "typescript";
+import ts from "typescript";
 import path from "path";
 
 // Possible generic solution (sophisticated)
@@ -14,6 +14,17 @@ import path from "path";
 //  ofc similar consideration for await
 //  great care needs to be taken in how the runtime type objects themselves are accessed and used
 //  set to a default __next_type_params after using them so if the function is called without it being set (such as from pure js) it still behaves reasonably
+
+function flagStrings(flags: number, enumClass: any) {
+	const result: string[] = [];
+	for (const key in enumClass) {
+		if (flags & enumClass[key]) {
+			result.push(key);
+			flags &= ~enumClass[key];
+		}
+	}
+	return result;
+}
 
 function runtypeTransformer(checker: ts.TypeChecker) {
 	return function (context: ts.TransformationContext): ts.Transformer<ts.SourceFile> {
@@ -55,9 +66,9 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 			);
 		}
 
-		function resolveReferenceType(param: ts.TypeReferenceNode): ts.Expression {
-			const typeParameter = checker.getTypeFromTypeNode(param).getSymbol()!.getDeclarations()![0] as ts.TypeParameterDeclaration;
-			const data = typeParameterData.get(typeParameter)!;
+		function resolveTypeParameter(type: ts.TypeParameter): ts.Expression {
+			const parameterDeclaration = type.getSymbol()!.getDeclarations()![0] as ts.TypeParameterDeclaration;
+			const data = typeParameterData.get(parameterDeclaration)!;
 			
 			return ts.createElementAccess(
 				ts.createIdentifier(`__runtype_type_params_${data.listId}`),
@@ -91,7 +102,19 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 		function createRuntypeVoid() {
 			return runtypeCreator("createVoidType");
 		}
-		
+
+		function createRuntypeUndefined() {
+			return runtypeCreator("createUndefinedType");
+		}
+
+		function createRuntypeNull() {
+			return runtypeCreator("createNullType");
+		}
+
+		function createRuntypeNonPrimitive() {
+			return runtypeCreator("createNonPrimitiveType");
+		}
+
 		function createRuntypeString() {
 			return runtypeCreator("createStringType");
 		}
@@ -112,14 +135,6 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 			return runtypeCreator("createBooleanType");
 		}
 
-		function createRuntypeUndefined() {
-			return runtypeCreator("createUndefinedType");
-		}
-
-		function createRuntypeNonPrimitive() {
-			return runtypeCreator("createNonPrimitiveType");
-		}
-
 		function createRuntypeFalse() {
 			return runtypeCreator("createFalseType");
 		}
@@ -128,231 +143,176 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 			return runtypeCreator("createTrueType");
 		}
 
-		function createRuntypeStringLiteral(text: string) {
+		function createRuntypeStringLiteral(value: string) {
 			return runtypeCreator(
 				"createStringLiteralType",
-				[ ts.createStringLiteral(text) ],
+				[ ts.createStringLiteral(value) ],
 			);
 		}
 
-		function createRuntypeNumberLiteral(text: string) {
+		function createRuntypeNumberLiteral(value: number) {
 			return runtypeCreator(
 				"createNumberLiteralType",
-				[ ts.createNumericLiteral(text) ],
+				[ ts.createNumericLiteral(value.toString()) ],
 			);
 		}
 
-		function createRuntypeBigIntLiteral(text: string) {
+		function createRuntypeBigIntLiteral(value: bigint | ts.PseudoBigInt) {
 			return runtypeCreator(
 				"createBigIntLiteralType",
-				[ ts.createBigIntLiteral(text) ],
+				[ ts.createBigIntLiteral(value.toString()) ],
 			);
 		}
 
-		function createRuntypeUnion(types: ts.NodeArray<ts.TypeNode>) {
+		function createRuntypeUnion(types: ts.Type[]) {
 			return runtypeCreator(
 				"createUnionType",
-				[ ts.createArrayLiteral(types.map(createRuntypeExpressionFromTypeNode)) ],
+				[ ts.createArrayLiteral(types.map(createRuntypeExpressionFromType)) ],
 			)
 		}
 
-		function createRuntypeIntersection(types: ts.NodeArray<ts.TypeNode>) {
+		function createRuntypeIntersection(types: ts.Type[]) {
 			return runtypeCreator(
 				"createIntersectionType",
-				[ ts.createArrayLiteral(types.map(createRuntypeExpressionFromTypeNode)) ],
+				[ ts.createArrayLiteral(types.map(createRuntypeExpressionFromType)) ],
 			)
 		}
 
-		function createRuntypeObject(members: ts.NodeArray<ts.TypeElement>) {
-			const properties: ts.ObjectLiteralElementLike[] = [];
-				
-			let propIndexString: undefined | ts.Expression = undefined;
-			let propIndexNumber: undefined | ts.Expression = undefined;
-	
-			for (const element of members) {
-				if (element.kind === ts.SyntaxKind.PropertySignature) {
-					const prop = element as ts.PropertySignature;
-					if (!prop.type) {
-						throw new Error(`Missing type information on property ${prop.name.getText()}`);
-					}
-					if (prop.name.kind === ts.SyntaxKind.ComputedPropertyName) {
-						throw new Error("Property cannot be computed");
-					}
-					
-					const propName = (prop.name as ts.Identifier | ts.StringLiteral | ts.NumericLiteral).text;
-					const propOptional = prop.questionToken !== undefined;
-					const propType = createRuntypeExpressionFromTypeNode(prop.type);
-	
-					properties.push(
-						ts.createPropertyAssignment(
-							propName,
-							ts.createObjectLiteral([
-								ts.createPropertyAssignment("optional", propOptional ? ts.createTrue() : ts.createFalse()),
-								ts.createPropertyAssignment("property", propType)
-							])
-						),
-					)
-				}
-				else if (element.kind === ts.SyntaxKind.IndexSignature) {
-					const prop = element as ts.IndexSignatureDeclaration;
-					if (prop.parameters[0].type!.kind === ts.SyntaxKind.StringKeyword) {
-						propIndexString = createRuntypeExpressionFromTypeNode(prop.type!);
-					}
-					else if (prop.parameters[0].type!.kind === ts.SyntaxKind.NumberKeyword) {
-						propIndexNumber = createRuntypeExpressionFromTypeNode(prop.type!);
-					}
-					else {
-						throw new Error(`Unrecognized index signature; syntax kind is ${prop.parameters[0].type!.kind}`);
-					}
-				}
-				else {
-					throw new Error(`Unsupported object element; syntax kind is ${element.kind}`);
-				}
+		function createRuntypeObject(type: ts.Type) {
+			const runtypeProperties: ts.Expression[] = [];
+
+			for (const property of checker.getPropertiesOfType(type)) {
+				const propertyKey = ts.createStringLiteral(property.getName());
+				const propertyValue = createRuntypeExpressionFromType(checker.getTypeAtLocation(property.valueDeclaration));
+				const propertyOptional = (property.valueDeclaration as ts.PropertyDeclaration).questionToken ? ts.createTrue() : ts.createFalse();
+				// TODO: readonly
+
+				runtypeProperties.push(
+					ts.createObjectLiteral([
+						ts.createPropertyAssignment("key", propertyKey),
+						ts.createPropertyAssignment("value", propertyValue),
+						ts.createPropertyAssignment("optional", propertyOptional),
+					]),
+				);
 			}
-	
+			
+			// TODO: readonly
+			const indexInfoString = checker.getIndexInfoOfType(type, ts.IndexKind.String);
+			const runtypeIndexString = indexInfoString && createRuntypeExpressionFromType(indexInfoString.type);
+			
+			// TODO: readonly
+			const indexInfoNumber = checker.getIndexInfoOfType(type, ts.IndexKind.Number);
+			const runtypeIndexNumber = indexInfoNumber && createRuntypeExpressionFromType(indexInfoNumber.type);
+
+			// TODO: call and construct signatures
+			// figure out if we want to use getAugmentedPropertiesOfType
+
 			return runtypeCreator(
 				"createObjectType",
 				[
-					ts.createObjectLiteral(properties),
-					propIndexString || ts.createIdentifier("undefined"),
-					propIndexNumber || ts.createIdentifier("undefined"),
-				]
+					ts.createArrayLiteral(runtypeProperties),
+					runtypeIndexString || ts.createIdentifier("undefined"),
+					runtypeIndexNumber || ts.createIdentifier("undefined"),
+				],
 			);
 		}
 
-		function createRuntypeArray(elementType: ts.TypeNode) {
-			return runtypeCreator(
-				"createArrayType",
-				[ createRuntypeExpressionFromTypeNode(elementType) ],
-			);
-		}
-
-		function createRuntypeTuple(elementTypes: ts.NodeArray<ts.TypeNode>) {
-			return runtypeCreator(
-				"createTupleType",
-				[ ts.createArrayLiteral(elementTypes.map(createRuntypeExpressionFromTypeNode)) ],
-			);
-		}
-
-		function createRuntypeExpressionFromTypeNode(node: ts.TypeNode): ts.Expression
-		{
-			// Never
-			if (node.kind === ts.SyntaxKind.NeverKeyword) {
+		function createRuntypeExpressionFromType(type: ts.Type): ts.Expression {
+			console.log(flagStrings(type.flags, ts.TypeFlags));
+			
+			if (type.flags & ts.TypeFlags.Never) {
 				return createRuntypeNever();
 			}
-			// Unknown
-			if (node.kind ===  ts.SyntaxKind.UnknownKeyword) {
+			if (type.flags & ts.TypeFlags.Unknown) {
 				return createRuntypeUnknown();
 			}
-			// Any
-			if (node.kind ===  ts.SyntaxKind.AnyKeyword) {
+			if (type.flags & ts.TypeFlags.Any) {
 				return createRuntypeAny();
 			}
-			// Void
-			if (node.kind ===  ts.SyntaxKind.VoidKeyword) {
+			if (type.flags & ts.TypeFlags.Void) {
 				return createRuntypeVoid();
 			}
-			// String primitive
-			if (node.kind ===  ts.SyntaxKind.StringKeyword) {
-				return createRuntypeString();
-			}
-			// Number primitive
-			if (node.kind ===  ts.SyntaxKind.NumberKeyword) {
-				return createRuntypeNumber();
-			}
-			// Symbol primitive
-			if (node.kind ===  ts.SyntaxKind.SymbolKeyword) {
-				return createRuntypeSymbol();
-			}
-			// Bigint primitive
-			if (node.kind ===  ts.SyntaxKind.BigIntKeyword) {
-				return createRuntypeBigInt();
-			}
-			// Boolean primitive
-			if (node.kind ===  ts.SyntaxKind.BooleanKeyword) {
-				return createRuntypeBoolean();
-			}
-			// Undefined primitive
-			if (node.kind ===  ts.SyntaxKind.UndefinedKeyword) {
+			if (type.flags & ts.TypeFlags.Undefined) {
 				return createRuntypeUndefined();
 			}
-			// 'object' keyword
-			if (node.kind ===  ts.SyntaxKind.ObjectKeyword) {
+			if (type.flags & ts.TypeFlags.Null) {
+				return createRuntypeNull();
+			}
+			if (type.flags & ts.TypeFlags.NonPrimitive) {
 				return createRuntypeNonPrimitive();
 			}
-			// Literals
-			if (node.kind ===  ts.SyntaxKind.LiteralType) {
-				const literalNode = (node as ts.LiteralTypeNode).literal;
-				// True literal
-				if (literalNode.kind === ts.SyntaxKind.TrueKeyword) {
+			if (type.flags & ts.TypeFlags.String) {
+				return createRuntypeString();
+			}
+			if (type.flags & ts.TypeFlags.Number) {
+				return createRuntypeNumber();
+			}
+			if (type.flags & ts.TypeFlags.BigInt) {
+				return createRuntypeBigInt();
+			}
+			if (type.flags & ts.TypeFlags.ESSymbol) {
+				return createRuntypeSymbol();
+			}
+			if (type.flags & ts.TypeFlags.Boolean) {
+				return createRuntypeBoolean();
+			}
+			if (type.flags & ts.TypeFlags.StringLiteral) {
+				return createRuntypeStringLiteral( (type as ts.StringLiteralType).value );
+			}
+			if (type.flags & ts.TypeFlags.NumberLiteral) {
+				return createRuntypeNumberLiteral( (type as ts.NumberLiteralType).value );
+			}
+			if (type.flags & ts.TypeFlags.BigIntLiteral) {
+				return createRuntypeBigIntLiteral( (type as ts.BigIntLiteralType).value );
+			}
+			if (type.flags & ts.TypeFlags.BooleanLiteral) {
+				// There may be a better way to do this
+				// One way that would probably work with only exposed properties would be to convert to a typenode and check 'kind', but this seems heavy
+				if ( (type as any).intrinsicName === "true" ) {
 					return createRuntypeTrue();
 				}
-				// False Literal
-				if (literalNode.kind === ts.SyntaxKind.FalseKeyword) {
+				else {
 					return createRuntypeFalse();
 				}
-				// String Literal
-				if (literalNode.kind === ts.SyntaxKind.StringLiteral || literalNode.kind === ts.SyntaxKind.NoSubstitutionTemplateLiteral) {
-					return createRuntypeStringLiteral((literalNode as ts.StringLiteral).text);
-				}
-				// Number Literal
-				if (literalNode.kind === ts.SyntaxKind.NumericLiteral) {
-					return createRuntypeNumberLiteral((literalNode as ts.NumericLiteral).text);
-				}
-				// Bigint Literal
-				if (literalNode.kind === ts.SyntaxKind.BigIntLiteral) {
-					return createRuntypeBigIntLiteral((literalNode as ts.BigIntLiteral).text);
-				}
-				throw new Error(`Unrecognized singleton type literal; syntax kind is ${literalNode.kind}`);
 			}
-			// Union
-			if (node.kind ===  ts.SyntaxKind.UnionType) {
-				return createRuntypeUnion((node as ts.UnionTypeNode).types);
+			if (type.flags & ts.TypeFlags.UniqueESSymbol) {
+				throw new Error("unique literal not implemented");
 			}
-			// Intersection
-			if (node.kind ===  ts.SyntaxKind.IntersectionType) {
-				return createRuntypeIntersection((node as ts.IntersectionTypeNode).types);
+			if (type.flags & ts.TypeFlags.Union) {
+				return createRuntypeUnion( (type as ts.UnionType).types );
 			}
-			// ObjectTypeLiteral
-			if (node.kind ===  ts.SyntaxKind.TypeLiteral) {
-				return createRuntypeObject((node as ts.TypeLiteralNode).members);
+			if (type.flags & ts.TypeFlags.Intersection) {
+				return createRuntypeIntersection( (type as ts.IntersectionType).types );
 			}
-			// Array
-			if (node.kind ===  ts.SyntaxKind.ArrayType) {
-				return createRuntypeArray((node as ts.ArrayTypeNode).elementType);
+			if (type.flags & ts.TypeFlags.Enum) {
+				// TODO: check if this is required
+				throw new Error("enums not implemented");
 			}
-			// Tuple
-			if (node.kind ===  ts.SyntaxKind.TupleType) {
-				return createRuntypeTuple((node as ts.TupleTypeNode).elementTypes);
+			if (type.flags & ts.TypeFlags.Object) {
+				return createRuntypeObject(type);
 			}
-			// Type Reference
-			if (node.kind ===  ts.SyntaxKind.TypeReference) {
-				return resolveReferenceType(node as ts.TypeReferenceNode);
+			// keyof T
+			if (type.flags & ts.TypeFlags.Index) {
+				throw new Error("keyof not implemented");
 			}
-			
-			if (node.kind ===  ts.SyntaxKind.ParenthesizedType) {
-				return createRuntypeExpressionFromTypeNode((node as ts.ParenthesizedTypeNode).type);
+			// T[K]
+			if (type.flags & ts.TypeFlags.IndexedAccess) {
+				throw new Error("Indexed access not implemented");
+			}
+			// T extends U ? X : Y
+			if (type.flags & ts.TypeFlags.Conditional) {
+				throw new Error("Conditional types not implemented");
+			}
+			if (type.flags & ts.TypeFlags.Substitution) {
+				// TODO: what is this?
+				throw new Error("substitution not implemented");
 			}
 
-			// TODO:
-			// SyntaxKind.FunctionType (limited runtime functionality)
-			// SyntaxKind.TypePredicate (type guards, only makes sense as return type to function which is not runtime anyway)
-			//   Consider exposing a enforceFunctionSignature function which injects checks for function params and return type
-			// SyntaxKind.ConstructorType
-			// SyntaxKind.TypeQuery (typeof keyword)
-			// SyntaxKind.OptionalType? (this might not be necessary)
-			// SyntaxKind.RestType (as last child of tuple type)
-			// SyntaxKind.ConditionalType (requires assignability comparison; complex)
-			// SyntaxKind.InferType (as child of ConditionalType; complex)
-			// SyntaxKind.ThisType
-			// SyntaxKind.TypeOperator (readonly, keyof, unique)
-			// SyntaxKind.IndexedAccessType
-			// SyntaxKind.MappedType (could get complex)
-			// SyntaxKind.ImportType (presumably the type checker can resolve this)
-			// 
-			// this TypeReference?
+			if (type.flags & ts.TypeFlags.TypeParameter) {
+				return resolveTypeParameter(type as ts.TypeParameter);
+			}
 
-			throw new Error(`Unsupported type node; syntax kind is ${node.kind}`);
+			throw new Error("Unrecognized type " + type.flags);
 		}
 		
 		function visitFunctionBody(body: ts.Block, typeParameters: ts.NodeArray<ts.TypeParameterDeclaration>): ts.Block {
@@ -392,7 +352,9 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 
 		function visitCallExpression(invocation: ts.CallExpression): ts.Node {
 			const typeArgumentsLiteral = ts.createArrayLiteral(
-				invocation.typeArguments ? invocation.typeArguments.map(createRuntypeExpressionFromTypeNode) : []
+				invocation.typeArguments
+					? invocation.typeArguments.map(t => createRuntypeExpressionFromType(checker.getTypeFromTypeNode(t)))
+					: []
 			);
 
 			// f(args)
