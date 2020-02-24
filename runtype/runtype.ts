@@ -1,8 +1,10 @@
 import util from "util";
 
 import { __runtime } from "./injection";
+import { __global_runtypes, __global_generic_widened_runtypes } from "./index";
 
 export enum RuntypeKind {
+	TypeParameter,
 	Never,
 	Unknown,
 	Any,
@@ -18,7 +20,7 @@ export enum RuntypeKind {
 	NonPrimitive,
 	StringLiteral,
 	NumberLiteral,
-	BigintLiteral,
+	BigIntLiteral,
 	Object,
 	Array,
 	Tuple,
@@ -41,14 +43,48 @@ export enum RuntypeKind {
 // OptionalType? (there is an OptionalTypeNode, but it seems it's Type is always a different Type)
 // JSDoc types?
 
-export abstract class Runtype {
-	public readonly kind: RuntypeKind;
+type UnionToIntersection<U> = (U extends any ? (k: U)=>void : never) extends ((k: infer I)=>void) ? I : never;
 
-	public constructor(kind: RuntypeKind) {
-		this.kind = kind;
+/**
+ * Assignablity between `ExactBrand<A>` and `ExactBrand<B>` is disallowed in both directions if they are not the exact same type
+ */
+type ExactBrand<T> =
+	0 extends (1 & T) ? "any" :
+	{
+		t: T;
+		intersection: UnionToIntersection<T>;
+		req: Required<T>;
+		key: keyof T;
+		string: string extends T ? 1 : 0;
+		number: number extends T ? 1 : 0;
+		bigint: bigint extends T ? 1 : 0;
+		symbol: symbol extends T ? 1 : 0;
+		void: void extends T ? 1 : 0;
+		object: object extends T ? 1 : 0;
+		props: { [Key in keyof T]: ExactBrand<T[Key]> }
+		params: T extends (...args: any)=>any ? ExactBrand<Parameters<T>> : never;
+		ret: T extends (...args: any)=>any ? ExactBrand<ReturnType<T>> : never;
+		length: ExactBrand<T extends { length: unknown } ? T["length"] : never>;
 	}
+;
 
-	// Checking
+export interface RuntypeBase {
+	readonly kind: RuntypeKind;
+	validate(value: unknown): ValidationResult;
+	typeString(): string;
+	[util.inspect.custom](depth: number, options: util.InspectOptionsStylized): unknown;
+	readonly parenthesisPriority: number;
+}
+
+const runtypeBrandSymbol = Symbol("Runtype brand");
+
+/**
+ * An instance of `Runtype<T>` is a runtime representation of the typescript type `T`.
+ * Note that the the type parameter `T` is specially treated so that two runtypes are only assignable if they have the exact same type.
+ */
+export declare class Runtype<T> implements RuntypeBase {
+	public readonly [runtypeBrandSymbol]: ExactBrand<T>;
+	public readonly kind: RuntypeKind;
 
 	/**
 	 * Validates whether a value is permitted by the type.
@@ -61,24 +97,45 @@ export abstract class Runtype {
 	 * ```
 	 * In the future we may add the ability to change this behavior.
 	 */
-	public abstract validate(value: unknown): ValidationResult;
+	public validate(value: unknown): ValidationResult;
 
-	// Strings
-
-	public abstract typeString(): string;
-
-	public [util.inspect.custom](depth: number, options: util.InspectOptionsStylized): unknown {
-		return this.typeString();
-	}
-
-	public parenthesisPriority(): number {
-		return 1;
-	}
+	public typeString(): string;
+	public [util.inspect.custom](depth: number, options: util.InspectOptionsStylized): unknown;
+	public readonly parenthesisPriority: number;
 }
 
-class NeverType extends Runtype {
+class TypeParameter implements RuntypeBase {
+	public readonly kind: RuntypeKind;
+
+	public readonly listId: number;
+	public readonly index: number;
+
+	public constructor(listId: number, index: number) {
+		this.kind = RuntypeKind.TypeParameter;
+		this.listId = listId;
+		this.index = index;
+	}
+
+	public validate(value: unknown): ValidationResult {
+		throw new Error("Runtypes with unresolved type parameters cannot be directly validated");
+	}
+
+	public typeString() {
+		return `T_${this.listId}_${this.index}`;
+	}
+
+	public [util.inspect.custom](depth: number, options: util.InspectOptionsStylized) {
+		return options.stylize(this.typeString(), "special");
+	}
+
+	public readonly parenthesisPriority = 1;
+}
+
+class NeverType implements RuntypeBase {
+	public readonly kind: RuntypeKind;
+
 	public constructor() {
-		super(RuntypeKind.Never);
+		this.kind = RuntypeKind.Never;
 	}
 
 	public validate(value: unknown): ValidationResult {
@@ -92,11 +149,15 @@ class NeverType extends Runtype {
 	public [util.inspect.custom](depth: number, options: util.InspectOptionsStylized) {
 		return options.stylize("never", "special");
 	}
+
+	public readonly parenthesisPriority = 1;
 }
 
-class UnknownType extends Runtype {
+class UnknownType implements RuntypeBase {
+	public readonly kind: RuntypeKind;
+
 	public constructor() {
-		super(RuntypeKind.Unknown);
+		this.kind = RuntypeKind.Unknown;
 	}
 
 	public validate(value: unknown): ValidationResult {
@@ -110,11 +171,15 @@ class UnknownType extends Runtype {
 	public [util.inspect.custom](depth: number, options: util.InspectOptionsStylized) {
 		return options.stylize("unknown", "special");
 	}
+
+	public readonly parenthesisPriority = 1;
 }
 
-class AnyType extends Runtype {
+class AnyType implements RuntypeBase {
+	public readonly kind: RuntypeKind;
+
 	public constructor() {
-		super(RuntypeKind.Any);
+		this.kind = RuntypeKind.Any;
 	}
 
 	// unsound
@@ -129,11 +194,15 @@ class AnyType extends Runtype {
 	public [util.inspect.custom](depth: number, options: util.InspectOptionsStylized) {
 		return options.stylize("any", "special");
 	}
+
+	public readonly parenthesisPriority = 1;
 }
 
-class VoidType extends Runtype {
+class VoidType implements RuntypeBase {
+	public readonly kind: RuntypeKind;
+
 	public constructor() {
-		super(RuntypeKind.Void);
+		this.kind = RuntypeKind.Void;
 	}
 
 	// unsound
@@ -153,11 +222,15 @@ class VoidType extends Runtype {
 	public [util.inspect.custom](depth: number, options: util.InspectOptionsStylized) {
 		return options.stylize("void", "special");
 	}
+
+	public readonly parenthesisPriority = 1;
 }
 
-class UndefinedType extends Runtype {
+class UndefinedType implements RuntypeBase {
+	public readonly kind: RuntypeKind;
+
 	public constructor() {
-		super(RuntypeKind.Undefined);
+		this.kind = RuntypeKind.Undefined;
 	}
 	
 	public validate(value: unknown): ValidationResult {
@@ -176,11 +249,15 @@ class UndefinedType extends Runtype {
 	public [util.inspect.custom](depth: number, options: util.InspectOptionsStylized) {
 		return options.stylize("undefined", "special");
 	}
+
+	public readonly parenthesisPriority = 1;
 }
 
-class StringType extends Runtype {
+class StringType implements RuntypeBase {
+	public readonly kind: RuntypeKind;
+
 	public constructor() {
-		super(RuntypeKind.String);
+		this.kind = RuntypeKind.String;
 	}
 
 	public validate(value: unknown): ValidationResult {
@@ -199,11 +276,15 @@ class StringType extends Runtype {
 	public [util.inspect.custom](depth: number, options: util.InspectOptionsStylized) {
 		return options.stylize("string", "special");
 	}
+
+	public readonly parenthesisPriority = 1;
 }
 
-class NumberType extends Runtype {
+class NumberType implements RuntypeBase {
+	public readonly kind: RuntypeKind;
+
 	public constructor() {
-		super(RuntypeKind.Number);
+		this.kind = RuntypeKind.Number;
 	}
 
 	public validate(value: unknown): ValidationResult {
@@ -222,11 +303,15 @@ class NumberType extends Runtype {
 	public [util.inspect.custom](depth: number, options: util.InspectOptionsStylized) {
 		return options.stylize("number", "special");
 	}
+
+	public readonly parenthesisPriority = 1;
 }
 
-class BigIntType extends Runtype {
+class BigIntType implements RuntypeBase {
+	public readonly kind: RuntypeKind;
+
 	public constructor() {
-		super(RuntypeKind.BigInt);
+		this.kind = RuntypeKind.BigInt;
 	}
 
 	public validate(value: unknown): ValidationResult {
@@ -245,11 +330,15 @@ class BigIntType extends Runtype {
 	public [util.inspect.custom](depth: number, options: util.InspectOptionsStylized) {
 		return options.stylize("bigint", "special");
 	}
+
+	public readonly parenthesisPriority = 1;
 }
 
-class SymbolType extends Runtype {
+class SymbolType implements RuntypeBase {
+	public readonly kind: RuntypeKind;
+
 	public constructor() {
-		super(RuntypeKind.Symbol);
+		this.kind = RuntypeKind.Symbol;
 	}
 
 	public validate(value: unknown): ValidationResult {
@@ -268,11 +357,15 @@ class SymbolType extends Runtype {
 	public [util.inspect.custom](depth: number, options: util.InspectOptionsStylized) {
 		return options.stylize("symbol", "special");
 	}
+
+	public readonly parenthesisPriority = 1;
 }
 
-class NullType extends Runtype {
+class NullType implements RuntypeBase {
+	public readonly kind: RuntypeKind;
+
 	public constructor() {
-		super(RuntypeKind.Null);
+		this.kind = RuntypeKind.Null;
 	}
 
 	public validate(value: unknown): ValidationResult {
@@ -291,11 +384,15 @@ class NullType extends Runtype {
 	public [util.inspect.custom](depth: number, options: util.InspectOptionsStylized) {
 		return options.stylize("null", "special");
 	}
+
+	public readonly parenthesisPriority = 1;
 }
 
-class TrueType extends Runtype {
+class TrueType implements RuntypeBase {
+	public readonly kind: RuntypeKind;
+
 	public constructor() {
-		super(RuntypeKind.True);
+		this.kind = RuntypeKind.True;
 	}
 
 	public validate(value: unknown): ValidationResult {
@@ -314,11 +411,15 @@ class TrueType extends Runtype {
 	public [util.inspect.custom](depth: number, options: util.InspectOptionsStylized) {
 		return options.stylize("true", "boolean");
 	}
+
+	public readonly parenthesisPriority = 1;
 }
 
-class FalseType extends Runtype {
+class FalseType implements RuntypeBase {
+	public readonly kind: RuntypeKind;
+
 	public constructor() {
-		super(RuntypeKind.False);
+		this.kind = RuntypeKind.False;
 	}
 
 	public validate(value: unknown): ValidationResult {
@@ -337,15 +438,19 @@ class FalseType extends Runtype {
 	public [util.inspect.custom](depth: number, options: util.InspectOptionsStylized) {
 		return options.stylize("false", "boolean");
 	}
+
+	public readonly parenthesisPriority = 1;
 }
 
 
 /**
  * This is the `object` keyword
  */
-class NonPrimitiveType extends Runtype {
+class NonPrimitiveType implements RuntypeBase {
+	public readonly kind: RuntypeKind;
+
 	public constructor() {
-		super(RuntypeKind.NonPrimitive)
+		this.kind = RuntypeKind.NonPrimitive;
 	}
 	
 	public validate(value: unknown): ValidationResult {
@@ -364,13 +469,16 @@ class NonPrimitiveType extends Runtype {
 	public [util.inspect.custom](depth: number, options: util.InspectOptionsStylized) {
 		return options.stylize("object", "special");
 	}
+
+	public readonly parenthesisPriority = 1;
 }
 
-class StringLiteralType extends Runtype {
+class StringLiteralType implements RuntypeBase {
+	public readonly kind: RuntypeKind;
 	public readonly literal: string;
 	
 	public constructor(literal: string) {
-		super(RuntypeKind.StringLiteral);
+		this.kind = RuntypeKind.StringLiteral;
 		this.literal = literal;
 	}
 
@@ -390,13 +498,16 @@ class StringLiteralType extends Runtype {
 	public [util.inspect.custom](depth: number, options: util.InspectOptionsStylized) {
 		return options.stylize(this.typeString(), "string");
 	}
+
+	public readonly parenthesisPriority = 1;
 }
 
-class NumberLiteralType extends Runtype {
+class NumberLiteralType implements RuntypeBase {
+	public readonly kind: RuntypeKind;
 	public readonly literal: number;
 	
 	public constructor(literal: number) {
-		super(RuntypeKind.NumberLiteral);
+		this.kind = RuntypeKind.NumberLiteral;
 		this.literal = literal;
 	}
 
@@ -416,13 +527,16 @@ class NumberLiteralType extends Runtype {
 	public [util.inspect.custom](depth: number, options: util.InspectOptionsStylized) {
 		return options.stylize(this.typeString(), "number");
 	}
+
+	public readonly parenthesisPriority = 1;
 }
 
-class BigIntLiteralType extends Runtype {
+class BigIntLiteralType implements RuntypeBase {
+	public readonly kind: RuntypeKind;
 	public readonly literal: bigint;
 	
 	public constructor(literal: bigint) {
-		super(RuntypeKind.BigintLiteral);
+		this.kind = RuntypeKind.BigIntLiteral;
 		this.literal = literal;
 	}
 
@@ -442,17 +556,19 @@ class BigIntLiteralType extends Runtype {
 	public [util.inspect.custom](depth: number, options: util.InspectOptionsStylized) {
 		return options.stylize(this.typeString(), "bigint");
 	}
+
+	public readonly parenthesisPriority = 1;
 }
 
 type ObjectPropertiesReadonly = {
 	readonly key: string | number | symbol;
-	readonly value: Runtype;
+	readonly value: RuntypeBase;
 	readonly optional: boolean;
 }[];
 
 type ObjectProperties = {
 	key: string | number | symbol;
-	value: Runtype;
+	value: RuntypeBase;
 	optional: boolean;
 }[];
 
@@ -472,17 +588,18 @@ function getAllProperties(obj: unknown) {
 	return result
 }
 
-class ObjectType extends Runtype {
+class ObjectType implements RuntypeBase {
+	public readonly kind: RuntypeKind;
 	public readonly properties: ObjectPropertiesReadonly;
-	public readonly indexString: Runtype | undefined;
-	public readonly indexNumber: Runtype | undefined;
+	public readonly indexString: RuntypeBase | undefined;
+	public readonly indexNumber: RuntypeBase | undefined;
 
 	public constructor(
 		properties: ObjectProperties,
-		indexString?: Runtype,
-		indexNumber?: Runtype,
+		indexString?: RuntypeBase,
+		indexNumber?: RuntypeBase,
 	) {
-		super(RuntypeKind.Object);
+		this.kind = RuntypeKind.Object;
 		this.properties = properties;
 		this.indexString = indexString;
 		this.indexNumber = indexNumber;
@@ -527,7 +644,7 @@ class ObjectType extends Runtype {
 					continue;
 				}
 
-				let propertyType: Runtype;
+				let propertyType: RuntypeBase;
 
 				if (this.indexNumber && !Number.isNaN(Number(propertyName))) {
 					propertyType = this.indexNumber;
@@ -601,14 +718,17 @@ class ObjectType extends Runtype {
 
 		return result.replace(/;,/g, ";");
 	}
+
+	public readonly parenthesisPriority = 1;
 }
 
 // TODO: consider just comparing this by property (as an ObjectType); typescript seems to do it that way
-class ArrayType extends Runtype {
-	public readonly element: Runtype;
+class ArrayType implements RuntypeBase {
+	public readonly kind: RuntypeKind;
+	public readonly element: RuntypeBase;
 
-	public constructor(element: Runtype) {
-		super(RuntypeKind.Array);
+	public constructor(element: RuntypeBase) {
+		this.kind = RuntypeKind.Array;
 		this.element = element;
 	}
 
@@ -642,14 +762,17 @@ class ArrayType extends Runtype {
 	public [util.inspect.custom](depth: number, options: util.InspectOptionsStylized) {
 		return `${this.element[util.inspect.custom](depth, options)}[]`;
 	}
+
+	public readonly parenthesisPriority = 1;
 }
 
 // TODO: consider just comparing this by property (as an ObjectType); typescript seems to do it that way
-class TupleType extends Runtype {
-	public readonly elements: Runtype[];
+class TupleType implements RuntypeBase {
+	public readonly kind: RuntypeKind;
+	public readonly elements: RuntypeBase[];
 	
-	public constructor(elements: Runtype[]) {
-		super(RuntypeKind.Tuple);
+	public constructor(elements: RuntypeBase[]) {
+		this.kind = RuntypeKind.Tuple;
 		this.elements = elements;
 	}
 
@@ -683,13 +806,16 @@ class TupleType extends Runtype {
 	public [util.inspect.custom](depth: number, options: util.InspectOptionsStylized) {
 		return this.elements;
 	}
+
+	public readonly parenthesisPriority = 1;
 }
 
-class UnionType extends Runtype {
-	public readonly types: Runtype[];
+class UnionType implements RuntypeBase {
+	public readonly kind: RuntypeKind;
+	public readonly types: RuntypeBase[];
 
-	public constructor(types: Runtype[]) {
-		super(RuntypeKind.Union);
+	public constructor(types: RuntypeBase[]) {
+		this.kind = RuntypeKind.Union;
 		this.types = types;
 	}
 
@@ -720,7 +846,7 @@ class UnionType extends Runtype {
 		for (const type of this.types) {
 			let typeString = type[util.inspect.custom](depth, options);
 			// while it is not strictly necessary, we want to parenthesize both intersections and unions
-			if (type.parenthesisPriority() >= 2) {
+			if (type.parenthesisPriority >= 2) {
 				typeString = `(${typeString})`;
 			}
 			typeStrings.push(String(typeString));
@@ -728,16 +854,15 @@ class UnionType extends Runtype {
 		return typeStrings.join(" | ");
 	}
 
-	public parenthesisPriority() {
-		return 3;
-	}
+	public readonly parenthesisPriority = 3;
 }
 
-class IntersectionType extends Runtype {
-	public readonly types: Runtype[];
+class IntersectionType implements RuntypeBase {
+	public readonly kind: RuntypeKind;
+	public readonly types: RuntypeBase[];
 
-	public constructor(types: Runtype[]) {
-		super(RuntypeKind.Intersection);
+	public constructor(types: RuntypeBase[]) {
+		this.kind = RuntypeKind.Intersection;
 		this.types = types;
 	}
 
@@ -768,7 +893,7 @@ class IntersectionType extends Runtype {
 		for (const type of this.types) {
 			let typeString = type[util.inspect.custom](depth, options);
 			// while it is not strictly necessary, we want to parenthesize both intersections and unions
-			if (type.parenthesisPriority() >= 2) {
+			if (type.parenthesisPriority >= 2) {
 				typeString = `(${typeString})`;
 			}
 			typeStrings.push(String(typeString));
@@ -776,9 +901,7 @@ class IntersectionType extends Runtype {
 		return typeStrings.join(" & ");
 	}
 
-	public parenthesisPriority() {
-		return 2;
-	}
+	public readonly parenthesisPriority = 2;
 }
 
 // Validation
@@ -809,10 +932,10 @@ export abstract class ValidationError {
 }
 
 class InvalidValueError extends ValidationError {
-	readonly expected: Runtype;
+	readonly expected: RuntypeBase;
 	readonly actual: unknown;
 	
-	public constructor(actual: unknown, expected: Runtype, children: ValidationError[] = []) {
+	public constructor(actual: unknown, expected: RuntypeBase, children: ValidationError[] = []) {
 		super(children);
 		this.expected = expected;
 		this.actual = actual;
@@ -864,9 +987,9 @@ class InvalidElementError extends ValidationError {
 
 class InvalidPropertyIndexError extends ValidationError {
 	readonly propertyName: string;
-	readonly expected: Runtype;
+	readonly expected: RuntypeBase;
 
-	public constructor(propertyName: string, expected: Runtype, children: ValidationError[]) {
+	public constructor(propertyName: string, expected: RuntypeBase, children: ValidationError[]) {
 		super(children);
 		this.propertyName = propertyName;
 		this.expected = expected;
@@ -879,133 +1002,113 @@ class InvalidPropertyIndexError extends ValidationError {
 
 // Exported creation methods
 
-export function createNeverType() {
-	return new NeverType();
+export function createNeverType(): Runtype<never> {
+	return new NeverType() as any;
 }
 
-export function createUnknownType() {
-	return new UnknownType();
+export function createUnknownType(): Runtype<unknown> {
+	return new UnknownType() as any;
 }
 
-export function createAnyType() {
-	return new AnyType();
+export function createAnyType(): Runtype<any> {
+	return new AnyType() as any;
 }
 
-export function createVoidType() {
-	return new VoidType();
+export function createVoidType(): Runtype<void> {
+	return new VoidType() as any;
 }
 
-export function createUndefinedType() {
-	return new UndefinedType();
+export function createUndefinedType(): Runtype<undefined> {
+	return new UndefinedType() as any;
 }
 
-export function createStringType() {
-	return new StringType();
+export function createStringType(): Runtype<string> {
+	return new StringType() as any;
 }
 
-export function createNumberType() {
-	return new NumberType();
+export function createNumberType(): Runtype<number> {
+	return new NumberType() as any;
 }
 
-export function createBigIntType() {
-	return new BigIntType();
+export function createBigIntType(): Runtype<bigint> {
+	return new BigIntType() as any;
 }
 
-export function createSymbolType() {
-	return new SymbolType();
+export function createSymbolType(): Runtype<symbol> {
+	return new SymbolType() as any;
 }
 
-export function createNullType() {
-	return new NullType();
+export function createNullType(): Runtype<null> {
+	return new NullType() as any;
 }
 
-export function createTrueType() {
-	return new TrueType();
+export function createTrueType(): Runtype<true> {
+	return new TrueType() as any;
 }
 
-export function createFalseType() {
-	return new FalseType();
+export function createFalseType(): Runtype<false> {
+	return new FalseType() as any;
 }
 
-export function createBooleanType() {
+export function createBooleanType(): Runtype<boolean> {
 	return createUnionType([ createTrueType(), createFalseType() ]);
 }
 
-export function createNonPrimitiveType() {
-	return new NonPrimitiveType();
+export function createNonPrimitiveType(): Runtype<object> {
+	return new NonPrimitiveType() as any;
 }
 
-export function createStringLiteralType(value: string) {
-	return new StringLiteralType(value);
+export function createStringLiteralType<T extends string>(value: T): Runtype<T> {
+	return new StringLiteralType(value) as any;
 }
 
-export function createNumberLiteralType(value: number) {
-	return new NumberLiteralType(value);
+export function createNumberLiteralType<T extends number>(value: T): Runtype<T> {
+	return new NumberLiteralType(value) as any;
 }
 
-export function createBigIntLiteralType(value: bigint) {
-	return new BigIntLiteralType(value);
+export function createBigIntLiteralType<T extends bigint>(value: T): Runtype<T> {
+	return new BigIntLiteralType(value) as any;
 }
 
-export function createObjectType(
+export function createObjectType<T>(
 	properties: ObjectProperties,
-	indexString?: Runtype,
-	indexNumber?: Runtype,
-) {
-	return new ObjectType(properties, indexString, indexNumber);
+	indexString?: RuntypeBase,
+	indexNumber?: RuntypeBase,
+): Runtype<T> {
+	return new ObjectType(properties, indexString, indexNumber) as any;
 }
 
-export function createArrayType(element: Runtype) {
-	return new ArrayType(element);
+export function createArrayType<T extends unknown[]>(element: RuntypeBase): Runtype<T> {
+	return new ArrayType(element) as any;
 }
 
-export function createTupleType(elements: Runtype[]) {
-	return new TupleType(elements);
+export function createTupleType<T extends unknown[]>(elements: RuntypeBase[]): Runtype<T> {
+	return new TupleType(elements) as any;
 }
 
-export function createUnionType(types: Runtype[]) {
-	return new UnionType(types);
+export function createUnionType<T>(types: RuntypeBase[]): Runtype<T> {
+	return new UnionType(types) as any;
 }
 
-export function createIntersectionType(types: Runtype[]) {
-	return new IntersectionType(types);
+export function createIntersectionType<T>(types: RuntypeBase[]): Runtype<T> {
+	return new IntersectionType(types) as any;
 }
 
-export function getGlobalType(name: string) {
-	const result = __runtime.global_runtypes.get(name);
-	if (result === undefined) {
-		throw new Error(`Cannot find global type '${name}'`);
+export function getBoxedPrimitive(type: RuntypeBase) {
+	if (type.kind === RuntypeKind.String || type.kind === RuntypeKind.StringLiteral) {
+		return __global_runtypes.String;
 	}
-	return result;
-}
-
-export function getBoxedPrimitive(type: Runtype) {
-	if (type.kind === RuntypeKind.String) {
-		return getGlobalType("String");
+	if (type.kind === RuntypeKind.Number || type.kind === RuntypeKind.NumberLiteral) {
+		return __global_runtypes.Number;
 	}
-	if (type.kind === RuntypeKind.Number) {
-		return getGlobalType("Number");
+	if (type.kind === RuntypeKind.BigInt || type.kind === RuntypeKind.BigIntLiteral) {
+		return __global_runtypes.BigInteger;
 	}
-	if (type.kind === RuntypeKind.BigInt) {
-		return getGlobalType("BigInt");
+	if (type.kind === RuntypeKind.Symbol /** TODO: unique symbol literals */) {
+		return __global_runtypes.Symbol;
 	}
-	if (type.kind === RuntypeKind.Symbol) {
-		return getGlobalType("Symbol");
-	}
-	if (type.kind === RuntypeKind.True) {
-		return getGlobalType("Boolean");
-	}
-	if (type.kind === RuntypeKind.False) {
-		return getGlobalType("Boolean");
-	}
-	if (type.kind === RuntypeKind.StringLiteral) {
-		return getGlobalType("String");
-	}
-	if (type.kind === RuntypeKind.NumberLiteral) {
-		return getGlobalType("Number");
-	}
-	if (type.kind === RuntypeKind.BigintLiteral) {
-		return getGlobalType("BigInt");
+	if (type.kind === RuntypeKind.True || type.kind === RuntypeKind.False) {
+		return __global_runtypes.Boolean;
 	}
 	return undefined;
 }
@@ -1021,7 +1124,7 @@ function getObjectKeyTypes(type: ObjectType) {
 		return [ createStringType(), createNumberType() ];
 	}
 
-	const types: Runtype[] = [];
+	const types: RuntypeBase[] = [];
 	for (const property of type.properties) {
 		if (typeof property.key === "string") {
 			types.push(createStringLiteralType(property.key));
@@ -1041,7 +1144,7 @@ function getObjectKeyTypes(type: ObjectType) {
 	return types;
 }
 
-export function createKeyOfType(type: Runtype): Runtype {
+export function createKeyOfType<T>(type: Runtype<T>): Runtype<keyof T> {
 	if (
 		type.kind === RuntypeKind.Unknown ||
 		type.kind === RuntypeKind.Void ||
@@ -1049,33 +1152,33 @@ export function createKeyOfType(type: Runtype): Runtype {
 		type.kind === RuntypeKind.Null ||
 		type.kind === RuntypeKind.NonPrimitive
 	) {
-		return createNeverType();
+		return createNeverType() as any;
 	}
 
 	if (
 		type.kind === RuntypeKind.Never ||
 		type.kind === RuntypeKind.Any
 	) {
-		return createUnionType([ createStringType(), createNumberType(), createSymbolType() ]);
+		return createUnionType([ createStringType(), createNumberType(), createSymbolType() ]) as any;
 	}
 
 	// For keyof types we defer primitives to their boxed versions
 	const boxed = getBoxedPrimitive(type);
 	if (boxed) {
-		type = boxed;
+		type = boxed as any;
 	}
 
 	if (type.kind === RuntypeKind.Object) {
-		return createUnionType(getObjectKeyTypes(type as ObjectType));
+		return createUnionType(getObjectKeyTypes(type as any)) as any;
 	}
 
 	if (type.kind === RuntypeKind.Array) {
-		return createKeyOfType(getGlobalType("Array"));
+		return createKeyOfType(__global_generic_widened_runtypes.Array) as any;
 	}
 
 	if (type.kind === RuntypeKind.Tuple) {
-		const keyTypes = getObjectKeyTypes(getGlobalType("Array") as ObjectType);
-		for (let i = 0; i < (type as TupleType).elements.length; i++) {
+		const keyTypes = getObjectKeyTypes(__global_generic_widened_runtypes.Array as any);
+		for (let i = 0; i < (type as any as TupleType).elements.length; i++) {
 			keyTypes.push(createStringLiteralType(i.toString()));
 		}
 		return createUnionType(keyTypes);
@@ -1083,12 +1186,12 @@ export function createKeyOfType(type: Runtype): Runtype {
 
 	if (type.kind === RuntypeKind.Union) {
 		// keys which are present in types
-		return createIntersectionType((type as UnionType).types.map(createKeyOfType));
+		return createIntersectionType((type as any as UnionType).types.map(createKeyOfType));
 	}
 
 	if (type.kind === RuntypeKind.Intersection) {
 		// keys which are present in any
-		return createUnionType((type as UnionType).types.map(createKeyOfType));
+		return createUnionType((type as any as UnionType).types.map(createKeyOfType));
 	}
 
 	throw new Error(`Unrecognized runtype; kind is ${type.kind}`);
@@ -1098,7 +1201,7 @@ export function createKeyOfType(type: Runtype): Runtype {
 | AccessType |
 \*----------*/
 
-function isValidAccessKeyType(keyType: Runtype) {
+function isValidAccessKeyType(keyType: RuntypeBase) {
 	if (
 		keyType.kind === RuntypeKind.Never ||
 		keyType.kind === RuntypeKind.String ||
@@ -1131,7 +1234,7 @@ function isValidAccessKeyType(keyType: Runtype) {
 	return false;
 }
 
-function createAccessTypeWithLiteralKey(type: Runtype, key: string | number): Runtype {
+function createAccessTypeWithLiteralKey(type: RuntypeBase, key: string | number): RuntypeBase {
 	// TODO: unique symbols
 	if (type.kind === RuntypeKind.Object) {
 		for (const { key: propertyKey, value } of (type as ObjectType).properties) {
@@ -1165,7 +1268,7 @@ function createAccessTypeWithLiteralKey(type: Runtype, key: string | number): Ru
 	throw new Error(`Unrecognized access type; kind is ${type.kind}`);
 }
 
-function createAccessTypeWithStringKey(type: Runtype): Runtype {
+function createAccessTypeWithStringKey(type: RuntypeBase): RuntypeBase {
 	if (type.kind === RuntypeKind.Object) {
 		if ((type as ObjectType).indexString) {
 			return (type as ObjectType).indexString!;
@@ -1183,7 +1286,7 @@ function createAccessTypeWithStringKey(type: Runtype): Runtype {
 	throw new Error(`Unrecognized access type; kind is ${type.kind}`);
 }
 
-function createAccessTypeWithNumberKey(type: Runtype): Runtype {
+function createAccessTypeWithNumberKey(type: RuntypeBase): RuntypeBase {
 	if (type.kind === RuntypeKind.Object) {
 		if ((type as ObjectType).indexNumber) {
 			return (type as ObjectType).indexNumber!;
@@ -1205,7 +1308,7 @@ function createAccessTypeWithNumberKey(type: Runtype): Runtype {
 
 }
 
-function createAccessTypeHelper(type: Runtype, keyType: Runtype): Runtype {
+function createAccessTypeHelper(type: RuntypeBase, keyType: RuntypeBase): RuntypeBase {
 	if (keyType.kind === RuntypeKind.Never) {
 		return createNeverType();
 	}
@@ -1249,7 +1352,7 @@ function createAccessTypeHelper(type: Runtype, keyType: Runtype): Runtype {
 	throw new Error("Invalid access key type");
 }
 
-export function createAccessType(type: Runtype, keyType: Runtype) {
+export function createAccessType<T, K extends keyof T>(type: Runtype<T>, keyType: Runtype<K>): Runtype<T[K]> {
 	if (!isValidAccessKeyType(keyType)) {
 		// TODO: error type;
 		throw new Error("Invalid key type for access type");
@@ -1257,7 +1360,7 @@ export function createAccessType(type: Runtype, keyType: Runtype) {
 	// For access types we defer primitives to their boxed versions
 	const boxed = getBoxedPrimitive(type);
 	if (boxed) {
-		type = boxed;
+		type = boxed as any;
 	}
-	return createAccessTypeHelper(type, keyType);
+	return createAccessTypeHelper(type, keyType) as any;
 }

@@ -47,11 +47,11 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 			);
 		}
 		
-		function isRuntypeofBody(body: ts.Block) {
+		function isRuntypeFunctionBody(body: ts.Block) {
 			return (
 				body.getSourceFile().fileName === path.resolve(__dirname, "./index.ts") &&
 				ts.isFunctionDeclaration(body.parent) &&
-				body.parent.name && body.parent.name.text === "runtypeof"
+				body.parent.name && body.parent.name.text === "runtype"
 			);
 		}
 
@@ -65,108 +65,100 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 			);
 		}
 
-		function createRuntypeNewExpression(constructorName: string, parameters: readonly ts.Expression[] = []) {
-			return ts.createNew(
+		function runtypeCreator(name: string, args: readonly ts.Expression[] = []) {
+			return ts.createCall(
 				ts.createPropertyAccess(
 					createRuntypeModuleReference(),
-					constructorName,
+					name,
 				),
 				undefined,
-				parameters,
+				args
 			);
 		}
 
 		function createRuntypeNever() {
-			return createRuntypeNewExpression("RuntypeNever");
+			return runtypeCreator("createNeverType");
 		}
 
 		function createRuntypeUnknown() {
-			return createRuntypeNewExpression("RuntypeNever");
+			return runtypeCreator("createUnknownType");
 		}
 
 		function createRuntypeAny() {
-			return createRuntypeNewExpression("RuntypeAny");
+			return runtypeCreator("createAnyType");
 		}
 		
 		function createRuntypeVoid() {
-			return createRuntypeNewExpression("RuntypeVoid");
+			return runtypeCreator("createVoidType");
 		}
 		
 		function createRuntypeString() {
-			return createRuntypeNewExpression("RuntypeString");
+			return runtypeCreator("createStringType");
 		}
 		
 		function createRuntypeNumber() {
-			return createRuntypeNewExpression("RuntypeNumber");
+			return runtypeCreator("createNumberType");
 		}
 		
 		function createRuntypeSymbol() {
-			return createRuntypeNewExpression("RuntypeSymbol");
+			return runtypeCreator("createSymbolType");
 		}
 
 		function createRuntypeBigInt() {
-			return createRuntypeNewExpression("RuntypeBigint");
+			return runtypeCreator("createBigIntType");
 		}
 
 		function createRuntypeBoolean() {
-			return createRuntypeNewExpression(
-				"RuntypeUnion",
-				[
-					ts.createArrayLiteral([
-						createRuntypeTrue(),
-						createRuntypeFalse(),
-					]),
-				],
-			)
+			return runtypeCreator("createBooleanType");
 		}
 
 		function createRuntypeUndefined() {
-			return createRuntypeNewExpression("RuntypeUndefined");
+			return runtypeCreator("createUndefinedType");
 		}
 
 		function createRuntypeNonPrimitive() {
-			return createRuntypeNewExpression("RuntypeNonPrimitive");
+			return runtypeCreator("createNonPrimitiveType");
 		}
 
 		function createRuntypeFalse() {
-			return createRuntypeNewExpression("RuntypeFalse");
+			return runtypeCreator("createFalseType");
 		}
 
 		function createRuntypeTrue() {
-			return createRuntypeNewExpression("RuntypeTrue");
+			return runtypeCreator("createTrueType");
 		}
 
 		function createRuntypeStringLiteral(text: string) {
-			return createRuntypeNewExpression(
-				"RuntypeStringLiteral",
+			return runtypeCreator(
+				"createStringLiteralType",
 				[ ts.createStringLiteral(text) ],
 			);
 		}
 
 		function createRuntypeNumberLiteral(text: string) {
-			return createRuntypeNewExpression(
-				"RuntypeNumberLiteral",
+			return runtypeCreator(
+				"createNumberLiteralType",
 				[ ts.createNumericLiteral(text) ],
 			);
 		}
 
 		function createRuntypeBigIntLiteral(text: string) {
-			return createRuntypeNewExpression(
-				"RuntypeBigIntLiteral",
+			return runtypeCreator(
+				"createBigIntLiteralType",
 				[ ts.createBigIntLiteral(text) ],
 			);
 		}
 
 		function createRuntypeUnion(types: ts.NodeArray<ts.TypeNode>) {
-			return createRuntypeNewExpression(
-				"RuntypeUnion",
+			return runtypeCreator(
+				"createUnionType",
 				[ ts.createArrayLiteral(types.map(createRuntypeExpressionFromTypeNode)) ],
 			)
 		}
 
 		function createRuntypeIntersection(types: ts.NodeArray<ts.TypeNode>) {
-			return createRuntypeNewExpression(
-				"RuntypeUnion",
+			return runtypeCreator(
+				"createIntersectionType",
 				[ ts.createArrayLiteral(types.map(createRuntypeExpressionFromTypeNode)) ],
 			)
 		}
@@ -218,8 +210,8 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 				}
 			}
 	
-			return createRuntypeNewExpression(
-				"RuntypeObject",
+			return runtypeCreator(
+				"createObjectType",
 				[
 					ts.createObjectLiteral(properties),
 					propIndexString || ts.createIdentifier("undefined"),
@@ -229,15 +221,15 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 		}
 
 		function createRuntypeArray(elementType: ts.TypeNode) {
-			return createRuntypeNewExpression(
-				"RuntypeArray",
+			return runtypeCreator(
+				"createArrayType",
 				[ createRuntypeExpressionFromTypeNode(elementType) ],
 			);
 		}
 
 		function createRuntypeTuple(elementTypes: ts.NodeArray<ts.TypeNode>) {
-			return createRuntypeNewExpression(
-				"RuntypeTuple",
+			return runtypeCreator(
+				"createTupleType",
 				[ ts.createArrayLiteral(elementTypes.map(createRuntypeExpressionFromTypeNode)) ],
 			);
 		}
@@ -248,119 +240,96 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 			if (node.kind === ts.SyntaxKind.NeverKeyword) {
 				return createRuntypeNever();
 			}
-		
 			// Unknown
 			if (node.kind ===  ts.SyntaxKind.UnknownKeyword) {
 				return createRuntypeUnknown();
 			}
-		
 			// Any
 			if (node.kind ===  ts.SyntaxKind.AnyKeyword) {
 				return createRuntypeAny();
 			}
-			
 			// Void
 			if (node.kind ===  ts.SyntaxKind.VoidKeyword) {
 				return createRuntypeVoid();
 			}
-		
 			// String primitive
 			if (node.kind ===  ts.SyntaxKind.StringKeyword) {
 				return createRuntypeString();
 			}
-		
 			// Number primitive
 			if (node.kind ===  ts.SyntaxKind.NumberKeyword) {
 				return createRuntypeNumber();
 			}
-		
 			// Symbol primitive
 			if (node.kind ===  ts.SyntaxKind.SymbolKeyword) {
 				return createRuntypeSymbol();
 			}
-		
 			// Bigint primitive
 			if (node.kind ===  ts.SyntaxKind.BigIntKeyword) {
 				return createRuntypeBigInt();
 			}
-			
 			// Boolean primitive
 			if (node.kind ===  ts.SyntaxKind.BooleanKeyword) {
 				return createRuntypeBoolean();
 			}
-		
 			// Undefined primitive
 			if (node.kind ===  ts.SyntaxKind.UndefinedKeyword) {
 				return createRuntypeUndefined();
 			}
-		
 			// 'object' keyword
 			if (node.kind ===  ts.SyntaxKind.ObjectKeyword) {
 				return createRuntypeNonPrimitive();
 			}
-
 			// Literals
 			if (node.kind ===  ts.SyntaxKind.LiteralType) {
 				const literalNode = (node as ts.LiteralTypeNode).literal;
-				
 				// True literal
 				if (literalNode.kind === ts.SyntaxKind.TrueKeyword) {
 					return createRuntypeTrue();
 				}
-		
 				// False Literal
 				if (literalNode.kind === ts.SyntaxKind.FalseKeyword) {
 					return createRuntypeFalse();
 				}
-				
 				// String Literal
 				if (literalNode.kind === ts.SyntaxKind.StringLiteral || literalNode.kind === ts.SyntaxKind.NoSubstitutionTemplateLiteral) {
 					return createRuntypeStringLiteral((literalNode as ts.StringLiteral).text);
 				}
-		
 				// Number Literal
 				if (literalNode.kind === ts.SyntaxKind.NumericLiteral) {
 					return createRuntypeNumberLiteral((literalNode as ts.NumericLiteral).text);
 				}
-		
 				// Bigint Literal
 				if (literalNode.kind === ts.SyntaxKind.BigIntLiteral) {
 					return createRuntypeBigIntLiteral((literalNode as ts.BigIntLiteral).text);
 				}
-		
 				throw new Error(`Unrecognized singleton type literal; syntax kind is ${literalNode.kind}`);
 			}
-			
 			// Union
 			if (node.kind ===  ts.SyntaxKind.UnionType) {
 				return createRuntypeUnion((node as ts.UnionTypeNode).types);
 			}
-		
 			// Intersection
 			if (node.kind ===  ts.SyntaxKind.IntersectionType) {
 				return createRuntypeIntersection((node as ts.IntersectionTypeNode).types);
 			}
-		
 			// ObjectTypeLiteral
 			if (node.kind ===  ts.SyntaxKind.TypeLiteral) {
 				return createRuntypeObject((node as ts.TypeLiteralNode).members);
 			}
-			
 			// Array
 			if (node.kind ===  ts.SyntaxKind.ArrayType) {
 				return createRuntypeArray((node as ts.ArrayTypeNode).elementType);
 			}
-		
 			// Tuple
 			if (node.kind ===  ts.SyntaxKind.TupleType) {
 				return createRuntypeTuple((node as ts.TupleTypeNode).elementTypes);
 			}
-		
 			// Type Reference
 			if (node.kind ===  ts.SyntaxKind.TypeReference) {
 				return resolveReferenceType(node as ts.TypeReferenceNode);
 			}
-		
+			
 			if (node.kind ===  ts.SyntaxKind.ParenthesizedType) {
 				return createRuntypeExpressionFromTypeNode((node as ts.ParenthesizedTypeNode).type);
 			}
@@ -387,7 +356,7 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 		}
 		
 		function visitFunctionBody(body: ts.Block, typeParameters: ts.NodeArray<ts.TypeParameterDeclaration>): ts.Block {
-			const listId = isRuntypeofBody(body) ? 0 : ++currentListId;
+			const listId = isRuntypeFunctionBody(body) ? 0 : ++currentListId;
 			const typeParamsIdentifier = `__runtype_type_params_${listId}`;
 			for (let index = 0; index < typeParameters.length; index++) {
 				typeParameterData.set(typeParameters[index], { listId, index });
