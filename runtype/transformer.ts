@@ -15,6 +15,7 @@ import path from "path";
 //  great care needs to be taken in how the runtime type objects themselves are accessed and used
 //  set to a default __next_type_params after using them so if the function is called without it being set (such as from pure js) it still behaves reasonably
 
+
 function flagStrings(flags: number, enumClass: any) {
 	for (const key in enumClass) {
 		if (flags === enumClass[key]) {
@@ -36,7 +37,7 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 	return function (context: ts.TransformationContext): ts.Transformer<ts.SourceFile> {
 		let currentListId = 0;
 		const typeParameterData = new WeakMap<ts.TypeParameterDeclaration, { listId: number, index: number }>();
-
+		
 		function isFileInRuntype(sourceFile: ts.SourceFile) {
 			return path.relative(path.dirname(sourceFile.fileName), __dirname) === "";
 		}
@@ -226,6 +227,10 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 			);
 		}
 
+		function createRuntypeUniqueSymbol(type: ts.UniqueESSymbolType): ts.Expression {
+			throw new Error("unique symbols not implemented");
+		}
+
 		function createRuntypeExpressionFromType(type: ts.Type): ts.Expression {
 			if (type.flags & ts.TypeFlags.Never) {
 				return createRuntypeNever();
@@ -283,7 +288,7 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 				}
 			}
 			if (type.flags & ts.TypeFlags.UniqueESSymbol) {
-				throw new Error("unique literal not implemented");
+				return createRuntypeUniqueSymbol(type as ts.UniqueESSymbolType);
 			}
 			if (type.flags & ts.TypeFlags.Union) {
 				return createRuntypeUnion( (type as ts.UnionType).types );
@@ -395,7 +400,7 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 							createRuntypeRuntimeReference(),
 							"invoked_function",
 						),
-						invocation.typeArguments, // this is almost certainly unnecessary but we'll err on the side of being non-destructive
+						invocation.typeArguments, // this is probably unnecessary but we'll err on the side of being non-destructive
 						ts.visitNodes(invocation.arguments, visitor),
 					),
 				),

@@ -21,15 +21,13 @@ export enum RuntypeKind {
 	StringLiteral,
 	NumberLiteral,
 	BigIntLiteral,
+	UniqueSymbol,
 	Object,
-	Array,
-	Tuple,
 	Union,
 	Intersection,
 }
 
 // TODO:
-// arrays as objects
 // unique symbols
 // Function,
 // Mapped + InferType
@@ -606,6 +604,31 @@ class ObjectType implements RuntypeBase {
 		this.indexNumber = indexNumber;
 	}
 
+	private unescape(propertyKey: string) {
+		const underscoreCharCode = 95; // '_'
+		const ampersatCharCode = 64;   // '@'
+
+		if (
+			propertyKey.length >= 2 &&
+			propertyKey.charCodeAt(0) === underscoreCharCode &&
+			propertyKey.charCodeAt(1) === underscoreCharCode
+		) {
+			if (propertyKey.length >= 3 && propertyKey.charCodeAt(2) === underscoreCharCode) {
+				return propertyKey.slice(1);
+			}
+			if (propertyKey.length >= 3 && propertyKey.charCodeAt(2) === ampersatCharCode) {
+				const symbolName = propertyKey.slice(3);
+				if (symbolName in Symbol) {
+					// from a WellKnownSymbolExpression
+					return (Symbol as any)[symbolName];
+				}
+			}
+			// TODO: unique symbols, es private fields
+			throw new Error(`unsupported escaped property name '${propertyKey}'; note that unique symbols are not implemented`);
+		}
+		return propertyKey;
+	}
+
 	public validate(value: unknown): ValidationResult {
 		if ((typeof value !== "object" && typeof value !== "function") || value === null) {
 			return { valid: false, error: new InvalidValueError(value, this) };
@@ -616,10 +639,8 @@ class ObjectType implements RuntypeBase {
 		const visitedProperties = new Set<string>();
 
 		for (const { key, value: valueType, optional } of this.properties) {
-			// TODO: we need to convert value symbol properties to their escaped names
-			// perhaps we retain a global map to unescape these
-			// TODO: we may want to check non-enumerable properties
-			if (!(key in value)) {
+			const unescaped = this.unescape(key);
+			if (!(unescaped in value)) {
 				if (!optional) {
 					valid = false;
 					errors.push(new MissingPropertyError(key));
@@ -627,15 +648,9 @@ class ObjectType implements RuntypeBase {
 				}
 				continue;
 			}
-			
-			// console.log("----------------------");
-			// console.log(value);
-			// console.log(key);
-			// console.log((value as any)[key]);
-			// console.log(valueType.kind);
 
 			visitedProperties.add(key);
-			const propertyValidation = valueType.validate((value as any)[key]);
+			const propertyValidation = valueType.validate((value as any)[unescaped]);
 			
 			if (!propertyValidation.valid) {
 				valid = false;
@@ -726,94 +741,6 @@ class ObjectType implements RuntypeBase {
 		);
 
 		return result.replace(/;,/g, ";");
-	}
-
-	public readonly parenthesisPriority = 1;
-}
-
-// TODO: consider just comparing this by property (as an ObjectType); typescript seems to do it that way
-class ArrayType implements RuntypeBase {
-	public readonly kind: RuntypeKind;
-	public readonly element: RuntypeBase;
-
-	public constructor(element: RuntypeBase) {
-		this.kind = RuntypeKind.Array;
-		this.element = element;
-	}
-
-	public validate(value: unknown): ValidationResult {
-		if (!Array.isArray(value)) {
-			return { valid: false, error: new InvalidValueError(value, this) };
-		}
-
-		let valid = true;
-		const errors: ValidationError[] = [];
-
-		for (let i = 0; i < value.length; i++) {
-			const elementValidation = this.element.validate(value[i]);
-
-			if (!elementValidation.valid) {
-				valid = false;
-			}
-			if (elementValidation.error !== null) {
-				errors.push(new InvalidElementError(i, [ elementValidation.error ]));
-				break; // short circuit after first element error
-			}
-		}
-
-		return { valid: valid, error: errors.length === 0 ? null : new InvalidValueError(value, this, errors) };
-	}
-
-	public typeString() {
-		return `${this.element.typeString()}[]`;
-	}
-
-	public [util.inspect.custom](depth: number, options: util.InspectOptionsStylized) {
-		return `${this.element[util.inspect.custom](depth, options)}[]`;
-	}
-
-	public readonly parenthesisPriority = 1;
-}
-
-// TODO: consider just comparing this by property (as an ObjectType); typescript seems to do it that way
-class TupleType implements RuntypeBase {
-	public readonly kind: RuntypeKind;
-	public readonly elements: RuntypeBase[];
-	
-	public constructor(elements: RuntypeBase[]) {
-		this.kind = RuntypeKind.Tuple;
-		this.elements = elements;
-	}
-
-	public validate(value: unknown): ValidationResult {
-		if (!Array.isArray(value) || value.length !== this.elements.length) {
-			return { valid: false, error: new InvalidValueError(value, this) };
-		}
-
-		let valid = true;
-		const errors: ValidationError[] = [];
-
-		for (let i = 0; i < this.elements.length; i++) {
-			const elementValidation = this.elements[i].validate(value[i]);
-
-			if (!elementValidation.valid) {
-				valid = false;
-			}
-			if (elementValidation.error !== null) {
-				errors.push(new InvalidElementError(i, [ elementValidation.error ]));
-				break; // short circuit after first element error
-			}
-		}
-
-		return { valid, error: errors.length === 0 ? null : new InvalidValueError(value, this, errors) };
-	}
-
-	public typeString() {
-		return `[ ${ this.elements.map(e => e.typeString()).join(", ") } ]`;
-	}
-	
-	public [util.inspect.custom](depth: number, options: util.InspectOptionsStylized) {
-		return this.elements;
 	}
 
 	public readonly parenthesisPriority = 1;
@@ -1087,14 +1014,6 @@ export function createObjectType<T>(
 	return new ObjectType(properties, indexString, indexNumber) as any;
 }
 
-export function createArrayType<T extends unknown[]>(element: RuntypeBase): Runtype<T> {
-	return new ArrayType(element) as any;
-}
-
-export function createTupleType<T extends unknown[]>(elements: RuntypeBase[]): Runtype<T> {
-	return new TupleType(elements) as any;
-}
-
 export function createUnionType<T>(types: RuntypeBase[]): Runtype<T> {
 	return new UnionType(types) as any;
 }
@@ -1179,18 +1098,6 @@ export function createKeyOfType<T>(type: Runtype<T>): Runtype<keyof T> {
 
 	if (type.kind === RuntypeKind.Object) {
 		return createUnionType(getObjectKeyTypes(type as any)) as any;
-	}
-
-	if (type.kind === RuntypeKind.Array) {
-		return createKeyOfType(__global_generic_widened_runtypes.Array) as any;
-	}
-
-	if (type.kind === RuntypeKind.Tuple) {
-		const keyTypes = getObjectKeyTypes(__global_generic_widened_runtypes.Array as any);
-		for (let i = 0; i < (type as any as TupleType).elements.length; i++) {
-			keyTypes.push(createStringLiteralType(i.toString()));
-		}
-		return createUnionType(keyTypes);
 	}
 
 	if (type.kind === RuntypeKind.Union) {
@@ -1373,5 +1280,3 @@ export function createAccessType<T, K extends keyof T>(type: Runtype<T>, keyType
 	}
 	return createAccessTypeHelper(type, keyType) as any;
 }
-
-
