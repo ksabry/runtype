@@ -1,6 +1,8 @@
 import ts from "typescript";
 import path from "path";
 
+import { RuntypeKind } from "./runtype";
+
 // Possible generic solution (sophisticated)
 //  pass type information at runtime through function invocations which require it
 //  monkey patch on a __type_params_stack array and a __next_type_params on each function object
@@ -171,48 +173,69 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 			);
 		}
 
-		function createRuntypeUnion(types: ts.Type[]) {
+		function createRuntypeUnion(types: ts.Type[], baseNode: ts.Node) {
 			return runtypeCreator(
 				"createUnionType",
-				[ ts.createArrayLiteral(types.map(createRuntypeExpressionFromType)) ],
+				[ ts.createArrayLiteral(types.map(t => createRuntypeExpressionFromType(t, baseNode))) ],
 			)
 		}
 
-		function createRuntypeIntersection(types: ts.Type[]) {
+		function createRuntypeIntersection(types: ts.Type[], baseNode: ts.Node) {
 			return runtypeCreator(
 				"createIntersectionType",
-				[ ts.createArrayLiteral(types.map(createRuntypeExpressionFromType)) ],
+				[ ts.createArrayLiteral(types.map(t => createRuntypeExpressionFromType(t, baseNode))) ],
 			)
 		}
 
-		function createRuntypeObject(type: ts.Type) {
+		function createRuntypeObject(type: ts.Type, baseNode: ts.Node) {
 			const runtypeProperties: ts.Expression[] = [];
 
 			// TODO: augmented?
 			for (const property of checker.getPropertiesOfType(type)) {
-				console.log(property.getEscapedName());
-
 				const propertyKey = ts.createStringLiteral(property.getEscapedName() as string);
-				const propertyValue = createRuntypeExpressionFromType(checker.getTypeAtLocation(property.valueDeclaration));
+				const propertyValue = createRuntypeExpressionFromType(checker.getTypeOfSymbolAtLocation(property, baseNode), baseNode);
 				const propertyOptional = (property.valueDeclaration as ts.PropertyDeclaration)?.questionToken ? ts.createTrue() : ts.createFalse();
-				// TODO: readonly
+				// TODO: readonly, access modifiers
+				
+				// We might not need to worry about late binding, I'm not sure what precisely ts has done by this point but at the very least
+				// it seems as though 'escapedName' is already the late bound version
+
+				let keyType: RuntypeKind.String | RuntypeKind.Number | RuntypeKind.Symbol = RuntypeKind.String;
+
+				if ((property.getEscapedName() as string).startsWith("__@")) {
+					keyType = RuntypeKind.Symbol;
+				}
+				else if (property.valueDeclaration) {
+					const name = ts.getNameOfDeclaration(property.valueDeclaration) as ts.PropertyName;
+					if (name) {
+						// TODO: this line is wrong! this gets the type of the value
+						console.log(property.getEscapedName(), name.kind);
+						const nameType = checker.getTypeAtLocation(name);
+						if (nameType.flags & ts.TypeFlags.NumberLike) {
+							keyType = RuntypeKind.Number;
+						}
+					}
+				}
+
+				const propertyKeyType = ts.createNumericLiteral(keyType.toString());
 
 				runtypeProperties.push(
 					ts.createObjectLiteral([
 						ts.createPropertyAssignment("key", propertyKey),
+						ts.createPropertyAssignment("keyType", propertyKeyType),
 						ts.createPropertyAssignment("value", propertyValue),
 						ts.createPropertyAssignment("optional", propertyOptional),
 					]),
 				);
 			}
 			
-			// TODO: readonly
+			// TODO: readonly, access modifiers?
 			const indexInfoString = checker.getIndexInfoOfType(type, ts.IndexKind.String);
-			const runtypeIndexString = indexInfoString && createRuntypeExpressionFromType(indexInfoString.type);
+			const runtypeIndexString = indexInfoString && createRuntypeExpressionFromType(indexInfoString.type, baseNode);
 			
-			// TODO: readonly
+			// TODO: readonly, access modifiers?
 			const indexInfoNumber = checker.getIndexInfoOfType(type, ts.IndexKind.Number);
-			const runtypeIndexNumber = indexInfoNumber && createRuntypeExpressionFromType(indexInfoNumber.type);
+			const runtypeIndexNumber = indexInfoNumber && createRuntypeExpressionFromType(indexInfoNumber.type, baseNode);
 
 			// TODO: call and construct signatures
 			// figure out if we want to use getAugmentedPropertiesOfType
@@ -231,7 +254,7 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 			throw new Error("unique symbols not implemented");
 		}
 
-		function createRuntypeExpressionFromType(type: ts.Type): ts.Expression {
+		function createRuntypeExpressionFromType(type: ts.Type, baseNode: ts.Node): ts.Expression {
 			if (type.flags & ts.TypeFlags.Never) {
 				return createRuntypeNever();
 			}
@@ -291,17 +314,13 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 				return createRuntypeUniqueSymbol(type as ts.UniqueESSymbolType);
 			}
 			if (type.flags & ts.TypeFlags.Union) {
-				return createRuntypeUnion( (type as ts.UnionType).types );
+				return createRuntypeUnion( (type as ts.UnionType).types, baseNode );
 			}
 			if (type.flags & ts.TypeFlags.Intersection) {
-				return createRuntypeIntersection( (type as ts.IntersectionType).types );
-			}
-			if (type.flags & ts.TypeFlags.Enum) {
-				// TODO: check if this is required
-				throw new Error("enums not implemented");
+				return createRuntypeIntersection( (type as ts.IntersectionType).types, baseNode );
 			}
 			if (type.flags & ts.TypeFlags.Object) {
-				return createRuntypeObject(type);
+				return createRuntypeObject(type, baseNode);
 			}
 			// keyof T
 			if (type.flags & ts.TypeFlags.Index) {
@@ -365,7 +384,7 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 		function visitCallExpression(invocation: ts.CallExpression): ts.Node {
 			const typeArgumentsLiteral = ts.createArrayLiteral(
 				invocation.typeArguments
-					? invocation.typeArguments.map(t => createRuntypeExpressionFromType(checker.getTypeFromTypeNode(t)))
+					? invocation.typeArguments.map(t => createRuntypeExpressionFromType(checker.getTypeFromTypeNode(t), t))
 					: []
 			);
 

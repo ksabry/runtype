@@ -28,10 +28,35 @@ export enum RuntypeKind {
 }
 
 // TODO:
+
+// better strings
+// 		index signatures, call signatures, construct signatures
+//		special case for array, readonly array, tuple, function
+//		enums
+
 // unique symbols
-// Function,
-// Mapped + InferType
-// Conditional,
+//		difficult or impossible to do perfectly
+//		consider the case where an external javascript library (or even another language) is provided a typescript declaration file asserting a provided value is a unique symbol
+//		We can't really inject our own information into the original library in general
+//		This means that at some point we simply have to trust the declared types, there is no way to know if what the library is returning is accurate to its own types purely at runtime
+//		We might be able to at least make sure all symbols we encounter of a single unique type are equal to each other, this would also implicitely include the definition of
+//		any unique type that is created in user typescript code. Though this is still not _perfect_, it might cover enough cases and be be clear enough behavior.
+//		This strategy would also have significant performance implications, depending on how it is implemented, and this is another very serious problem/consideration.
+
+// Function
+//		We cannot do much validation for a function at runtime. We can neither verify the types of the parameters nor the return type directly.
+//		We may be able to do the very minor step of checking the parameter count, but this may not be reliable (consider "arguments")
+//		We _could_ potentially provide the ability to somehow mark a function to do validation _when it's called_.
+//		This would simply inject code at the beginning of the function body checking the arguments, and before any return checking the type.
+//		The implementation of this would require some serious thought.
+
+// Mapped
+
+// Conditional + InferType
+//		This cannot be done only with the ability to check if a value satisfies a type, we need to compare types for subtype/supertype relationships.
+//		The complexity of this feature should not be underestimated.
+//		That said, we might be able to iteratively support easier subsets of this feature, string literals -> string for example.
+
 // ParameterOf,
 // ReturnOf,
 // TypeQuery (typeof)
@@ -560,6 +585,7 @@ class BigIntLiteralType implements RuntypeBase {
 
 type ObjectPropertiesReadonly = {
 	readonly key: string;
+	readonly keyKind: RuntypeKind.String | RuntypeKind.Number | RuntypeKind.Symbol;
 	readonly value: RuntypeBase;
 	readonly optional: boolean;
 }[];
@@ -567,6 +593,7 @@ type ObjectPropertiesReadonly = {
 type ObjectProperties = {
 	// escaped name, always string
 	key: string;
+	keyKind: RuntypeKind.String | RuntypeKind.Number | RuntypeKind.Symbol;
 	value: RuntypeBase;
 	optional: boolean;
 }[];

@@ -9,6 +9,8 @@ function checkType<T>(value: unknown) {
 	console.log("========================");
 
 	const rt = runtype<T>();
+	// const keyofRt = runtype<keyof T>();
+
 	console.log(rt);
 	console.log(value);
 
@@ -21,39 +23,42 @@ function checkType<T>(value: unknown) {
 	}
 }
 
+const x = "abc";
+
+type Test = {
+	[Symbol.iterator]: number;
+	[x]: number;
+	field: string;
+	0: string;
+}
+
+let t: keyof Test = 0;
+
 // checkType<{ a: string, b: string, c: string }>({ b: 10 });
-checkType<string[]>([ "a", "b" ]);
+checkType<Test>({ field: "" });
 
-// function createUniqueESSymbolType(symbol: Symbol) {
-// 	const type = <UniqueESSymbolType>createType(TypeFlags.UniqueESSymbol);
-// 	type.symbol = symbol;
-// 	type.escapedName = `__@${type.symbol.escapedName}@${getSymbolId(type.symbol)}` as __String;
-// 	return type;
-// }
-
-// export function getPropertyNameForKnownSymbolName(symbolName: string): __String {
-// 	return "__@" + symbolName as __String;
-// }
-
-// function getPropertyNameFromType(type: StringLiteralType | NumberLiteralType | UniqueESSymbolType): __String {
-// 	if (type.flags & TypeFlags.UniqueESSymbol) {
-// 		return (<UniqueESSymbolType>type).escapedName;
+// export function symbolName(symbol: Symbol): string {
+// 	if (symbol.valueDeclaration && isPrivateIdentifierPropertyDeclaration(symbol.valueDeclaration)) {
+// 		return idText(symbol.valueDeclaration.name);
 // 	}
-// 	if (type.flags & (TypeFlags.StringLiteral | TypeFlags.NumberLiteral)) {
-// 		return escapeLeadingUnderscores("" + (<StringLiteralType | NumberLiteralType>type).value);
+// 	return unescapeLeadingUnderscores(symbol.escapedName);
+// }
+
+// function getLiteralTypeFromProperty(prop: Symbol, include: TypeFlags) {
+// 	if (!(getDeclarationModifierFlagsFromSymbol(prop) & ModifierFlags.NonPublicAccessibilityModifier)) {
+// 		let type = getSymbolLinks(getLateBoundSymbol(prop)).nameType;
+// 		if (!type && !isKnownSymbol(prop)) {
+// 			if (prop.escapedName === InternalSymbolName.Default) {
+// 				type = getLiteralType("default");
+// 			}
+// 			else {
+// 				const name = prop.valueDeclaration && getNameOfDeclaration(prop.valueDeclaration) as PropertyName;
+// 				type = name && getLiteralTypeFromPropertyName(name) || getLiteralType(symbolName(prop));
+// 			}
+// 		}
+// 		if (type && type.flags & include) {
+// 			return type;
+// 		}
 // 	}
-// 	return Debug.fail();
-// }
-
-// export function escapeLeadingUnderscores(identifier: string): __String {
-// 	return (
-// 		identifier.length >= 2 &&
-// 		identifier.charCodeAt(0) === CharacterCodes._ &&
-// 		identifier.charCodeAt(1) === CharacterCodes._ ? "_" + identifier : identifier
-// 	) as __String;
-// }
-
-// export function unescapeLeadingUnderscores(identifier: __String): string {
-// 	const id = identifier as string;
-// 	return id.length >= 3 && id.charCodeAt(0) === CharacterCodes._ && id.charCodeAt(1) === CharacterCodes._ && id.charCodeAt(2) === CharacterCodes._ ? id.substr(1) : id;
+// 	return neverType;
 // }
