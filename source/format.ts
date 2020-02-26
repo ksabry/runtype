@@ -9,9 +9,10 @@ function checkType<T>(value: unknown) {
 	console.log("========================");
 
 	const rt = runtype<T>();
-	// const keyofRt = runtype<keyof T>();
+	const keyofRt = runtype<keyof T>();
 
 	console.log(rt);
+	console.log(keyofRt);
 	console.log(value);
 
 	const validation = rt.validate(value);
@@ -23,19 +24,11 @@ function checkType<T>(value: unknown) {
 	}
 }
 
-const x = "abc";
 
-type Test = {
-	[Symbol.iterator]: number;
-	[x]: number;
-	field: string;
-	0: string;
-}
-
-let t: keyof Test = 0;
+type Test = { [key: number]: unknown; 0: string, "other": string }
 
 // checkType<{ a: string, b: string, c: string }>({ b: 10 });
-checkType<Test>({ field: "" });
+checkType<Test>({ field: "", [Symbol.iterator]: 3, abc: 3, "0": "test" });
 
 // export function symbolName(symbol: Symbol): string {
 // 	if (symbol.valueDeclaration && isPrivateIdentifierPropertyDeclaration(symbol.valueDeclaration)) {

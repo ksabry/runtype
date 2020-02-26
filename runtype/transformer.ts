@@ -187,42 +187,67 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 			)
 		}
 
+		/**
+		 * Gets the type of the property key, either string, number, or symbol.
+		 * The logic here is adapted from the typescript source code, in particular `getLiteralTypeFromProperty`
+		 */
+		function getPropertyKeyType(property: ts.Symbol): RuntypeKind.String | RuntypeKind.Number | RuntypeKind.Symbol {
+			if ((property.getEscapedName() as string).startsWith("__@")) {
+				return RuntypeKind.Symbol;
+			}
+			else if (property.valueDeclaration) {
+				const name = ts.getNameOfDeclaration(property.valueDeclaration) as ts.PropertyName;
+				if (name) {
+					if (ts.isIdentifier(name)) {
+						return RuntypeKind.String;
+					}
+					else if (ts.isComputedPropertyName(name)) {
+						const nameType = checker.getTypeAtLocation(name.expression);
+						if (nameType.flags & ts.TypeFlags.NumberLike) {
+							return RuntypeKind.Number;
+						}
+						else if (nameType.flags & ts.TypeFlags.StringLike) {
+							return RuntypeKind.String;
+						}
+						else if (nameType.flags & ts.TypeFlags.ESSymbolLike) {
+							return RuntypeKind.Symbol;
+						}
+						else {
+							throw new Error(`Unrecognized computed property name type; flags are ${nameType.flags}`);
+						}
+					}
+					else if (ts.isNumericLiteral(name)) {
+						return RuntypeKind.Number;
+					}
+					else if (ts.isStringLiteral(name)) {
+						return RuntypeKind.String;
+					}
+					else {
+						throw new Error(`Unrecognized property name type; kind is ${(name as any).kind}`);
+					}
+				}
+			}
+			// As far as I can tell from the typescript source, simply defaulting to string here is the correct behavior
+			// In particular the line `type = name && getLiteralTypeFromPropertyName(name) || getLiteralType(symbolName(prop));`
+			// should always return a string if `name` is undefined
+			return RuntypeKind.String;
+		}
+
 		function createRuntypeObject(type: ts.Type, baseNode: ts.Node) {
 			const runtypeProperties: ts.Expression[] = [];
 
 			// TODO: augmented?
 			for (const property of checker.getPropertiesOfType(type)) {
 				const propertyKey = ts.createStringLiteral(property.getEscapedName() as string);
+				const propertyKeyKind = ts.createNumericLiteral(getPropertyKeyType(property).toString());
 				const propertyValue = createRuntypeExpressionFromType(checker.getTypeOfSymbolAtLocation(property, baseNode), baseNode);
 				const propertyOptional = (property.valueDeclaration as ts.PropertyDeclaration)?.questionToken ? ts.createTrue() : ts.createFalse();
 				// TODO: readonly, access modifiers
 				
-				// We might not need to worry about late binding, I'm not sure what precisely ts has done by this point but at the very least
-				// it seems as though 'escapedName' is already the late bound version
-
-				let keyType: RuntypeKind.String | RuntypeKind.Number | RuntypeKind.Symbol = RuntypeKind.String;
-
-				if ((property.getEscapedName() as string).startsWith("__@")) {
-					keyType = RuntypeKind.Symbol;
-				}
-				else if (property.valueDeclaration) {
-					const name = ts.getNameOfDeclaration(property.valueDeclaration) as ts.PropertyName;
-					if (name) {
-						// TODO: this line is wrong! this gets the type of the value
-						console.log(property.getEscapedName(), name.kind);
-						const nameType = checker.getTypeAtLocation(name);
-						if (nameType.flags & ts.TypeFlags.NumberLike) {
-							keyType = RuntypeKind.Number;
-						}
-					}
-				}
-
-				const propertyKeyType = ts.createNumericLiteral(keyType.toString());
-
 				runtypeProperties.push(
 					ts.createObjectLiteral([
 						ts.createPropertyAssignment("key", propertyKey),
-						ts.createPropertyAssignment("keyType", propertyKeyType),
+						ts.createPropertyAssignment("keyKind", propertyKeyKind),
 						ts.createPropertyAssignment("value", propertyValue),
 						ts.createPropertyAssignment("optional", propertyOptional),
 					]),
@@ -252,6 +277,15 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 
 		function createRuntypeUniqueSymbol(type: ts.UniqueESSymbolType): ts.Expression {
 			throw new Error("unique symbols not implemented");
+		}
+
+		function createRuntypeKeyOf(targetType: ts.Type, baseNode: ts.Node) {
+			return runtypeCreator(
+				"createKeyOfType",
+				[
+					createRuntypeExpressionFromType(targetType, baseNode),
+				],
+			);
 		}
 
 		function createRuntypeExpressionFromType(type: ts.Type, baseNode: ts.Node): ts.Expression {
@@ -324,7 +358,7 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 			}
 			// keyof T
 			if (type.flags & ts.TypeFlags.Index) {
-				throw new Error("keyof not implemented");
+				return createRuntypeKeyOf( (type as ts.IndexType).type, baseNode );
 			}
 			// T[K]
 			if (type.flags & ts.TypeFlags.IndexedAccess) {

@@ -384,6 +384,43 @@ class SymbolType implements RuntypeBase {
 	public readonly parenthesisPriority = 1;
 }
 
+/**
+ * A well known symbol is one that lives statically on `Symbol`, e.g. `Symbol.iterator`.
+ * Typescript treats these differently than unique symbols.
+ * For our purposes we might eventually be able to unify this with unique symbols,
+ * but those haven't been implemented yet and have their own concerns.
+ */
+class WellKnownSymbolType implements RuntypeBase {
+	public readonly kind: RuntypeKind;
+	public readonly name: string;
+	public readonly symbol: symbol;
+
+	public constructor(name: string) {
+		this.kind = RuntypeKind.Symbol;
+		this.name = name;
+		this.symbol = (Symbol as any)[name];
+	}
+
+	public validate(value: unknown): ValidationResult {
+		if (value === this.symbol) {
+			return { valid: true, error: null };
+		}
+		else {
+			return { valid: false, error: new InvalidValueError(value, this) };
+		}
+	}
+
+	public typeString() {
+		return `Symbol.${this.name}`;
+	}
+
+	public [util.inspect.custom](depth: number, options: util.InspectOptionsStylized) {
+		return options.stylize(this.typeString(), "special");
+	}
+
+	public readonly parenthesisPriority = 1;
+}
+
 class NullType implements RuntypeBase {
 	public readonly kind: RuntypeKind;
 
@@ -614,6 +651,28 @@ function getAllProperties(obj: unknown) {
 	return result
 }
 
+function unescapePropertyKey(key: string, keyKind: RuntypeKind.String | RuntypeKind.Number | RuntypeKind.Symbol) {
+	if (keyKind === RuntypeKind.Symbol) {
+		const symbolName = key.slice(3);
+		if (symbolName in Symbol) {
+			// from a WellKnownSymbolExpression
+			return (Symbol as any)[symbolName] as symbol;
+		}
+		throw new Error(`Unsupported unique symbol property: ${symbolName}`);
+	}
+	else if (keyKind === RuntypeKind.Number) {
+		return Number(key);
+	}
+	else {
+		if (key.startsWith("___")) {
+			return key.slice(1);
+		}
+		else {
+			return key;
+		}
+	}
+}
+
 class ObjectType implements RuntypeBase {
 	public readonly kind: RuntypeKind;
 	public readonly properties: ObjectPropertiesReadonly;
@@ -631,31 +690,6 @@ class ObjectType implements RuntypeBase {
 		this.indexNumber = indexNumber;
 	}
 
-	private unescape(propertyKey: string) {
-		const underscoreCharCode = 95; // '_'
-		const ampersatCharCode = 64;   // '@'
-
-		if (
-			propertyKey.length >= 2 &&
-			propertyKey.charCodeAt(0) === underscoreCharCode &&
-			propertyKey.charCodeAt(1) === underscoreCharCode
-		) {
-			if (propertyKey.length >= 3 && propertyKey.charCodeAt(2) === underscoreCharCode) {
-				return propertyKey.slice(1);
-			}
-			if (propertyKey.length >= 3 && propertyKey.charCodeAt(2) === ampersatCharCode) {
-				const symbolName = propertyKey.slice(3);
-				if (symbolName in Symbol) {
-					// from a WellKnownSymbolExpression
-					return (Symbol as any)[symbolName];
-				}
-			}
-			// TODO: unique symbols, es private fields
-			throw new Error(`unsupported escaped property name '${propertyKey}'; note that unique symbols are not implemented`);
-		}
-		return propertyKey;
-	}
-
 	public validate(value: unknown): ValidationResult {
 		if ((typeof value !== "object" && typeof value !== "function") || value === null) {
 			return { valid: false, error: new InvalidValueError(value, this) };
@@ -665,8 +699,10 @@ class ObjectType implements RuntypeBase {
 		const errors: ValidationError[] = [];
 		const visitedProperties = new Set<string>();
 
-		for (const { key, value: valueType, optional } of this.properties) {
-			const unescaped = this.unescape(key);
+		// TODO: consider checking for missing properties in a seperate loop to find all of them regardless of if an InvalidPropertyError occurs
+
+		for (const { key, keyKind, value: valueType, optional } of this.properties) {
+			const unescaped = unescapePropertyKey(key, keyKind);
 			if (!(unescaped in value)) {
 				if (!optional) {
 					valid = false;
@@ -689,7 +725,6 @@ class ObjectType implements RuntypeBase {
 		}
 
 		if (valid && (this.indexString || this.indexNumber)) {
-			// Note that we don't want to check hasOwnProperty
 			for (const propertyName of getAllProperties(value)) {
 				if (visitedProperties.has(propertyName)) {
 					continue;
@@ -743,7 +778,8 @@ class ObjectType implements RuntypeBase {
 		const optionalKeys: (string | number | symbol)[] = []
 		const inspectObject: { [key: string]: ProxyInspected } = {};
 		
-		for (const { key, optional, value } of this.properties) {
+		for (const { key, keyKind, value, optional } of this.properties) {
+			// TODO: pass through keys differently for different keyKinds
 			if (optional) {
 				optionalKeys.push(key);
 			}
@@ -1033,6 +1069,10 @@ export function createBigIntLiteralType<T extends bigint>(value: T): Runtype<T> 
 	return new BigIntLiteralType(value) as any;
 }
 
+export function createWellKnownSymbolType<T extends symbol>(name: string): Runtype<T> {
+	return new WellKnownSymbolType(name) as any;
+}
+
 export function createObjectType<T>(
 	properties: ObjectProperties,
 	indexString?: RuntypeBase,
@@ -1073,29 +1113,34 @@ export function getBoxedPrimitive(type: RuntypeBase) {
 \*---------*/
 
 function getObjectKeyTypes(type: ObjectType) {
-	// TODO: add unique symbols
-	
 	if (type.indexString) {
 		return [ createStringType(), createNumberType() ];
 	}
 
 	const types: RuntypeBase[] = [];
-	for (const property of type.properties) {
-		if (typeof property.key === "string") {
-			types.push(createStringLiteralType(property.key));
-		}
-		else if (typeof property.key === "number") {
-			types.push(createNumberLiteralType(property.key));
-		}
-		else {
-			// TODO: unique symbols
-			throw Error("unique symbols not implemented");
-		}
-	}
+	
 	if (type.indexNumber) {
 		types.push(createNumberType());
 	}
-
+	
+	for (const property of type.properties) {
+		// we don't push symbols, and don't push number literals if we have a number index
+		if (
+			property.keyKind === RuntypeKind.Symbol ||
+			type.indexNumber && property.keyKind === RuntypeKind.Number
+		) {
+			continue;
+		}
+	
+		if (property.keyKind === RuntypeKind.Number) {
+			types.push(createNumberLiteralType(Number(property.key)));
+		}
+		else {
+			const unescaped = property.key.startsWith("___") ? property.key.slice(1) : property.key;
+			types.push(createStringLiteralType(unescaped));
+		}
+	}
+	
 	return types;
 }
 
@@ -1128,21 +1173,21 @@ export function createKeyOfType<T>(type: Runtype<T>): Runtype<keyof T> {
 	}
 
 	if (type.kind === RuntypeKind.Union) {
-		// keys which are present in types
 		return createIntersectionType((type as any as UnionType).types.map(createKeyOfType));
 	}
 
 	if (type.kind === RuntypeKind.Intersection) {
-		// keys which are present in any
 		return createUnionType((type as any as UnionType).types.map(createKeyOfType));
 	}
 
-	throw new Error(`Unrecognized runtype; kind is ${type.kind}`);
+	throw new Error(`Unrecognized runtype in createKeyOfType; kind is ${type.kind}`);
 }
 
 /*----------*\
 | AccessType |
 \*----------*/
+
+// Needs to be redone
 
 function isValidAccessKeyType(keyType: RuntypeBase) {
 	if (
