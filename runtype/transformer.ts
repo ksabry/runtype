@@ -191,7 +191,7 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 			if (referenceId !== undefined) {
 				// We have already encountered this type; we are recursively hitting it
 				return runtypeCreateCall(
-					"typeFromReferenceId",
+					"createReferenceType",
 					[ ts.createNumericLiteral(referenceId.toString()) ],
 				);
 			}
@@ -211,7 +211,7 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 			if (referenceId !== undefined) {
 				// We have already encountered this type; we are recursively hitting it
 				return runtypeCreateCall(
-					"typeFromReferenceId",
+					"createReferenceType",
 					[ ts.createNumericLiteral(referenceId.toString()) ],
 				);
 			}
@@ -277,7 +277,7 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 			if (referenceId !== undefined) {
 				// We have already encountered this type; we are recursively hitting it
 				return runtypeCreateCall(
-					"typeFromReferenceId",
+					"createReferenceType",
 					[ ts.createNumericLiteral(referenceId.toString()) ],
 				);
 			}

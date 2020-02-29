@@ -25,10 +25,29 @@ function checkType<T>(value: unknown) {
 }
 
 
-type Test = { [key: number]: unknown; 0: string, "other": string }
+interface Test {
+	field: string;
+	recursive?: Test;
+}
+
+let A: Test = {
+	field: "A",
+}
+
+let B: Test = {
+	field: "B",
+}
+
+let C: Test = {
+	field: 3,
+}
+
+A.recursive = B;
+B.recursive = C;
+C.recursive = A;
 
 // checkType<{ a: string, b: string, c: string }>({ b: 10 });
-checkType<Test>({ field: "", [Symbol.iterator]: 3, abc: 3, "0": "test" });
+checkType<Test>(A);
 
 // export function symbolName(symbol: Symbol): string {
 // 	if (symbol.valueDeclaration && isPrivateIdentifierPropertyDeclaration(symbol.valueDeclaration)) {

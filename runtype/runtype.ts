@@ -1,4 +1,4 @@
-import util from "util";
+import util, { inspect } from "util";
 
 import { RuntypeKind } from "./runtype-kind";
 import { __runtime } from "./injection";
@@ -992,7 +992,7 @@ class ValidationResultCache {
 }
 
 class ValidationVisitedSet {
-	private visited: WeakMap<RuntypeBase, WeakSet<object>>;
+	private visited = new WeakMap<RuntypeBase, WeakSet<object>>();
 
 	public has(type: RuntypeBase, value: object) {
 		let valueSet = this.visited.get(type);
@@ -1050,7 +1050,7 @@ class InvalidValueError extends ValidationError {
 	}
 
 	public toStringShort() {
-		return `Invalid value: ${JSON.stringify(this.actual)}\nExpected: ${this.expected.typeString()}`;
+		return `Invalid value: ${inspect(this.actual, { colors: true })}\nExpected: ${inspect(this.expected, { colors: true })}`;
 	}
 }
 
@@ -1289,8 +1289,8 @@ export function createIntersectionType(types: RuntypeBase[], referenceId?: numbe
 	return result;
 }
 
-export function typeFromReferenceId(referenceId: number): RuntypeBase {
-	return typeCache.get(referenceId)!
+export function createReferenceType(referenceId: number): RuntypeBase {
+	return new ReferenceType(referenceId);
 }
 
 export function getBoxedPrimitive(type: RuntypeBase) {
