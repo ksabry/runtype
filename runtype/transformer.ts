@@ -1,4 +1,4 @@
-import ts from "typescript";
+import ts, { visitNode } from "typescript";
 import path from "path";
 
 import { RuntypeKind } from "./runtype-kind";
@@ -37,6 +37,8 @@ function flagStrings(flags: number, enumClass: any) {
 
 function runtypeTransformer(checker: ts.TypeChecker) {
 	return function (context: ts.TransformationContext): ts.Transformer<ts.SourceFile> {
+		context
+
 		let currentListId = 0;
 		const typeParameterData = new WeakMap<ts.TypeParameterDeclaration, { listId: number, index: number }>();
 		
@@ -55,6 +57,18 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 
 		function isFileInRuntype(sourceFile: ts.SourceFile) {
 			return path.relative(path.dirname(sourceFile.fileName), __dirname) === "";
+		}
+
+		function isFunctionLikeDeclaration(node: ts.Node | undefined): node is ts.FunctionLikeDeclaration {
+			return node !== undefined && (
+				ts.isFunctionDeclaration(node) ||
+				ts.isMethodDeclaration(node) ||
+				ts.isGetAccessorDeclaration(node) ||
+				ts.isSetAccessorDeclaration(node) ||
+				ts.isConstructorDeclaration(node) ||
+				ts.isFunctionExpression(node) ||
+				ts.isArrowFunction(node)
+			);
 		}
 
 		function addRuntypeInjection(sourceFile: ts.SourceFile) {
@@ -77,14 +91,6 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 			return ts.createPropertyAccess(
 				createRuntypeModuleReference(),
 				"__runtime",
-			);
-		}
-		
-		function isRuntypeFunctionBody(body: ts.Block) {
-			return (
-				body.getSourceFile().fileName === path.resolve(__dirname, "./index.ts") &&
-				ts.isFunctionDeclaration(body.parent) &&
-				body.parent.name && body.parent.name.text === "runtype"
 			);
 		}
 
@@ -186,7 +192,7 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 			);
 		}
 
-		function createRuntypeUnion(type: ts.UnionType, context: CreateRuntypeExpressionContext) {
+		function createRuntypeUnion(type: ts.UnionType, createContext: CreateRuntypeContext) {
 			let referenceId = getTypeReferenceId(type);
 			if (referenceId !== undefined) {
 				// We have already encountered this type; we are recursively hitting it
@@ -200,13 +206,13 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 			return runtypeCreateCall(
 				"createUnionType",
 				[
-					ts.createArrayLiteral(type.types.map(t => createRuntypeExpressionFromType(t, context))),
+					ts.createArrayLiteral(type.types.map(t => createRuntypeExpressionFromType(t, createContext))),
 					ts.createNumericLiteral(referenceId.toString()),
 				],
 			)
 		}
 
-		function createRuntypeIntersection(type: ts.IntersectionType, context: CreateRuntypeExpressionContext) {
+		function createRuntypeIntersection(type: ts.IntersectionType, createContext: CreateRuntypeContext) {
 			let referenceId = getTypeReferenceId(type);
 			if (referenceId !== undefined) {
 				// We have already encountered this type; we are recursively hitting it
@@ -220,7 +226,7 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 			return runtypeCreateCall(
 				"createIntersectionType",
 				[
-					ts.createArrayLiteral(type.types.map(t => createRuntypeExpressionFromType(t, context))),
+					ts.createArrayLiteral(type.types.map(t => createRuntypeExpressionFromType(t, createContext))),
 					ts.createNumericLiteral(referenceId.toString()),
 				],
 			)
@@ -272,7 +278,7 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 			return RuntypeKind.String;
 		}
 
-		function createRuntypeObject(type: ts.Type, context: CreateRuntypeExpressionContext) {
+		function createRuntypeObject(type: ts.Type, createContext: CreateRuntypeContext) {
 			let referenceId = getTypeReferenceId(type);
 			if (referenceId !== undefined) {
 				// We have already encountered this type; we are recursively hitting it
@@ -289,7 +295,7 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 			for (const property of checker.getPropertiesOfType(type)) {
 				const propertyKey = ts.createStringLiteral(property.getEscapedName() as string);
 				const propertyKeyKind = ts.createNumericLiteral(getPropertyKeyType(property).toString());
-				const propertyValue = createRuntypeExpressionFromType(checker.getTypeOfSymbolAtLocation(property, context.baseNode), context);
+				const propertyValue = createRuntypeExpressionFromType(checker.getTypeOfSymbolAtLocation(property, createContext.baseNode), createContext);
 				const propertyOptional = (property.valueDeclaration as ts.PropertyDeclaration)?.questionToken ? ts.createTrue() : ts.createFalse();
 				// TODO: readonly, access modifiers
 				
@@ -305,11 +311,11 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 			
 			// TODO: readonly, access modifiers?
 			const indexInfoString = checker.getIndexInfoOfType(type, ts.IndexKind.String);
-			const runtypeIndexString = indexInfoString && createRuntypeExpressionFromType(indexInfoString.type, context);
+			const runtypeIndexString = indexInfoString && createRuntypeExpressionFromType(indexInfoString.type, createContext);
 			
 			// TODO: readonly, access modifiers?
 			const indexInfoNumber = checker.getIndexInfoOfType(type, ts.IndexKind.Number);
-			const runtypeIndexNumber = indexInfoNumber && createRuntypeExpressionFromType(indexInfoNumber.type, context);
+			const runtypeIndexNumber = indexInfoNumber && createRuntypeExpressionFromType(indexInfoNumber.type, createContext);
 
 			// TODO: call and construct signatures
 			// figure out if we want to use getAugmentedPropertiesOfType
@@ -329,21 +335,21 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 			throw new Error("unique symbols not implemented");
 		}
 
-		function createRuntypeKeyOf(type: ts.IndexType, context: CreateRuntypeExpressionContext) {
+		function createRuntypeKeyOf(type: ts.IndexType, createContext: CreateRuntypeContext) {
 			return runtypeCreateCall(
 				"createKeyOfType",
 				[
-					createRuntypeExpressionFromType(type.type, context),
+					createRuntypeExpressionFromType(type.type, createContext),
 				],
 			);
 		}
 
-		interface CreateRuntypeExpressionContext {
+		interface CreateRuntypeContext {
 			baseNode: ts.Node;
 			ancestors: ts.Type[];
 		}
 
-		function createRuntypeExpressionFromType(type: ts.Type, context: CreateRuntypeExpressionContext): ts.Expression {
+		function createRuntypeExpressionFromType(type: ts.Type, createContext: CreateRuntypeContext): ts.Expression {
 			if (type.flags & ts.TypeFlags.Never) {
 				return createRuntypeNever();
 			}
@@ -403,17 +409,17 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 				return createRuntypeUniqueSymbol(type as ts.UniqueESSymbolType);
 			}
 			if (type.flags & ts.TypeFlags.Union) {
-				return createRuntypeUnion(type as ts.UnionType, context);
+				return createRuntypeUnion(type as ts.UnionType, createContext);
 			}
 			if (type.flags & ts.TypeFlags.Intersection) {
-				return createRuntypeIntersection(type as ts.IntersectionType, context);
+				return createRuntypeIntersection(type as ts.IntersectionType, createContext);
 			}
 			if (type.flags & ts.TypeFlags.Object) {
-				return createRuntypeObject(type, context);
+				return createRuntypeObject(type, createContext);
 			}
 			// keyof T
 			if (type.flags & ts.TypeFlags.Index) {
-				return createRuntypeKeyOf(type as ts.IndexType, context);
+				return createRuntypeKeyOf(type as ts.IndexType, createContext);
 			}
 			// T[K]
 			if (type.flags & ts.TypeFlags.IndexedAccess) {
@@ -435,8 +441,8 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 			throw new Error("Unrecognized type " + type.flags);
 		}
 		
-		function visitFunctionBody(body: ts.Block, typeParameters: ts.NodeArray<ts.TypeParameterDeclaration>): ts.Block {
-			const listId = isRuntypeFunctionBody(body) ? 0 : ++currentListId;
+		function visitFunctionBody(body: ts.Block | ts.Expression, typeParameters: ts.NodeArray<ts.TypeParameterDeclaration>): ts.Block {
+			const listId = ++currentListId;
 			const typeParamsIdentifier = `__runtype_type_params_${listId}`;
 			for (let index = 0; index < typeParameters.length; index++) {
 				typeParameterData.set(typeParameters[index], { listId, index });
@@ -464,10 +470,19 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 				),
 			);
 
-			return ts.createBlock(
-				ts.visitNodes(ts.createNodeArray<ts.Statement>([ typeParamsDefinition, ...body.statements ]), visitor),
-				true /* I don't know if it is safe to pass 'body.multiLine'; it likely is but it's marked with @internal in the typescript source and not present in the public types */
-			);
+			if (ts.isBlock(body)) {
+				return ts.createBlock(
+					ts.visitNodes(ts.createNodeArray<ts.Statement>([ typeParamsDefinition, ...body.statements ]), visitor),
+					true /* I don't know if it is safe to pass 'body.multiLine'; it likely is but it's marked with @internal in the typescript source and not present in the public types */
+				);
+			}
+			else {
+				// arrow function immediate expression
+				return ts.createBlock(
+					ts.createNodeArray<ts.Statement>([ typeParamsDefinition, ts.createReturn(ts.visitEachChild(body, visitor, context)) ]),
+					true,
+				);
+			}
 		}
 
 		function visitCallExpression(invocation: ts.CallExpression): ts.Node {
@@ -476,6 +491,16 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 					? invocation.typeArguments.map(t => createRuntypeExpressionFromType(checker.getTypeFromTypeNode(t), { baseNode: t, ancestors: [] }))
 					: []
 			);
+
+			// TODO: we can greatly simplify the following step when <function> is an identifier
+			//       we have to be careful about even a property access though as getters are a thing (this might be possible to detect in all cases, though I think it's unlikely)
+			//       random thought, this probably is also techincally possible with an identifier? can you define properties on globalThis? Can you set globalThis to a Proxy object???
+			//       note that the `with` keyword would definitely make this also possible with an identifier
+			//       there may be other cases this applies as well, should carefully consider
+			
+			// TODO: we currently use our __runtime to temporarily hold the invoked function, just so that we don't pollute the local variable pool too much
+			//       but this may not actually be relevent if we choose a good name, and might actually hurt performance, needs to be tested
+			//       maybe also consider implications of explicitely deleting __runtype.invoked_function after the call (or maybe even in the body injection)
 
 			// f(args)
 			// ->
@@ -517,9 +542,11 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 
 		const visitor: ts.Visitor = (node) => {
 			// Look into what nodes other than FunctionDeclaration you need to get
-			if (ts.isBlock(node) && ts.isFunctionDeclaration(node.parent) && node.parent.typeParameters !== undefined) {
-				return visitFunctionBody(node, node.parent.typeParameters);
+			// From the source it looks like FunctionDeclaration | MethodDeclaration | GetAccessorDeclaration | SetAccessorDeclaration | ConstructorDeclaration | FunctionExpression | ArrowFunction
+			if (isFunctionLikeDeclaration(node.parent) && node === node.parent.body && node.parent.typeParameters !== undefined) {
+				return visitFunctionBody(node as any, node.parent.typeParameters);
 			}
+			// TODO: deafult type parameters
 			if (ts.isCallExpression(node) && node.typeArguments !== undefined) {
 				return visitCallExpression(node);
 			}

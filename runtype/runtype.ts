@@ -6,6 +6,11 @@ import { __global_runtypes, __global_generic_widened_runtypes } from "./index";
 
 // TODO:
 
+// We probably cannot naively access properties on objects passed for validation the way we are.
+//		If they are defined by a getter which mutates then we at least cannot access it completely naively
+//		It honestly still probably makes the most sense for the default behavior to be that every property is accessed _once_
+//		Of course this could also be configurable
+
 // better strings
 // 		index signatures, call signatures, construct signatures
 //		special case for array, readonly array, tuple, function
@@ -1316,38 +1321,6 @@ export function getBoxedPrimitive(type: RuntypeBase) {
 | KeyOfType |
 \*---------*/
 
-function getObjectKeyTypes(type: ObjectType) {
-	if (type.indexString) {
-		return [ createStringType(), createNumberType() ];
-	}
-
-	const types: RuntypeBase[] = [];
-	
-	if (type.indexNumber) {
-		types.push(createNumberType());
-	}
-	
-	for (const property of type.properties) {
-		// we don't push symbols, and don't push number literals if we have a number index
-		if (
-			property.keyKind === RuntypeKind.Symbol ||
-			type.indexNumber && property.keyKind === RuntypeKind.Number
-		) {
-			continue;
-		}
-	
-		if (property.keyKind === RuntypeKind.Number) {
-			types.push(createNumberLiteralType(Number(property.key)));
-		}
-		else {
-			const unescaped = property.key.startsWith("___") ? property.key.slice(1) : property.key;
-			types.push(createStringLiteralType(unescaped));
-		}
-	}
-	
-	return types;
-}
-
 export function createKeyOfType(type: RuntypeBase): RuntypeBase {
 	if (
 		type.kind === RuntypeKind.Unknown ||
@@ -1385,6 +1358,38 @@ export function createKeyOfType(type: RuntypeBase): RuntypeBase {
 	}
 
 	throw new Error(`Unrecognized runtype in createKeyOfType; kind is ${type.kind}`);
+}
+
+function getObjectKeyTypes(type: ObjectType) {
+	if (type.indexString) {
+		return [ createStringType(), createNumberType() ];
+	}
+
+	const types: RuntypeBase[] = [];
+	
+	if (type.indexNumber) {
+		types.push(createNumberType());
+	}
+	
+	for (const property of type.properties) {
+		// we don't push symbols, and don't push number literals if we have a number index
+		if (
+			property.keyKind === RuntypeKind.Symbol ||
+			type.indexNumber && property.keyKind === RuntypeKind.Number
+		) {
+			continue;
+		}
+	
+		if (property.keyKind === RuntypeKind.Number) {
+			types.push(createNumberLiteralType(Number(property.key)));
+		}
+		else {
+			const unescaped = property.key.startsWith("___") ? property.key.slice(1) : property.key;
+			types.push(createStringLiteralType(unescaped));
+		}
+	}
+	
+	return types;
 }
 
 /*----------*\

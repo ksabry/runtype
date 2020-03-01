@@ -24,30 +24,14 @@ function checkType<T>(value: unknown) {
 	}
 }
 
+const exp = <T>() => runtype<T>();
 
 interface Test {
 	field: string;
-	recursive?: Test;
 }
 
-let A: Test = {
-	field: "A",
-}
-
-let B: Test = {
-	field: "B",
-}
-
-let C: Test = {
-	field: 3,
-}
-
-A.recursive = B;
-B.recursive = C;
-C.recursive = A;
-
+console.log(exp<Test>());
 // checkType<{ a: string, b: string, c: string }>({ b: 10 });
-checkType<Test>(A);
 
 // export function symbolName(symbol: Symbol): string {
 // 	if (symbol.valueDeclaration && isPrivateIdentifierPropertyDeclaration(symbol.valueDeclaration)) {
