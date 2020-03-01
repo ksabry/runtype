@@ -24,13 +24,14 @@ function checkType<T>(value: unknown) {
 	}
 }
 
-const exp = <T>() => runtype<T>();
+const exp = <A, T = string, U = string>() => runtype<U>();
 
 interface Test {
 	field: string;
 }
 
-console.log(exp<Test>());
+console.log(exp<number, number>());
+console.log(exp<number, number, number>());
 // checkType<{ a: string, b: string, c: string }>({ b: 10 });
 
 // export function symbolName(symbol: Symbol): string {

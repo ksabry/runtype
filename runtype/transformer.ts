@@ -346,7 +346,6 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 
 		interface CreateRuntypeContext {
 			baseNode: ts.Node;
-			ancestors: ts.Type[];
 		}
 
 		function createRuntypeExpressionFromType(type: ts.Type, createContext: CreateRuntypeContext): ts.Expression {
@@ -444,11 +443,53 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 		function visitFunctionBody(body: ts.Block | ts.Expression, typeParameters: ts.NodeArray<ts.TypeParameterDeclaration>): ts.Block {
 			const listId = ++currentListId;
 			const typeParamsIdentifier = `__runtype_type_params_${listId}`;
+			
+			let anyDefaults = false;
+			const typeParameterDefaults = [];
+			
 			for (let index = 0; index < typeParameters.length; index++) {
 				typeParameterData.set(typeParameters[index], { listId, index });
+				const typeParameterDefault = typeParameters[index].default;
+				if (typeParameterDefault) {
+					typeParameterDefaults.push(createRuntypeExpressionFromType(checker.getTypeFromTypeNode(typeParameterDefault), { baseNode: typeParameterDefault }));
+					anyDefaults = true;
+				}
+				else {
+					typeParameterDefaults.push(undefined);
+				}
 			}
 
-			// const __runtype_type_params_n = this.__runtype.runtype_type_params || {};
+			let typeArgumentsExpression: ts.Expression;
+
+			function typeParametersInput() {
+				return ts.createPropertyAccess(
+					createRuntypeRuntimeReference(),
+					"type_params",
+				);
+			}
+
+			if (!anyDefaults) {
+				typeArgumentsExpression = typeParametersInput();
+			}
+			else {
+				typeArgumentsExpression = ts.createArrayLiteral(
+					typeParameterDefaults.map(
+						(paramterDefault, index) => {
+							if (paramterDefault === undefined) {
+								return ts.createElementAccess(typeParametersInput(), index);
+							}
+							else {
+								return ts.createBinary(
+									ts.createElementAccess(typeParametersInput(), index),
+									ts.SyntaxKind.BarBarToken,
+									paramterDefault,
+								);
+							}
+						}
+					),
+				);
+			}
+
 			const typeParamsDefinition = ts.createVariableStatement(
 				undefined,
 				ts.createVariableDeclarationList(
@@ -456,15 +497,8 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 						ts.createVariableDeclaration(
 							typeParamsIdentifier,
 							undefined,
-							ts.createBinary(
-								ts.createPropertyAccess(
-									createRuntypeRuntimeReference(),
-									"type_params",
-								),
-								ts.SyntaxKind.BarBarToken,
-								ts.createObjectLiteral([]),
-							),
-						)
+							typeArgumentsExpression,
+						),
 					],
 					ts.NodeFlags.Const,
 				),
@@ -472,14 +506,14 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 
 			if (ts.isBlock(body)) {
 				return ts.createBlock(
-					ts.visitNodes(ts.createNodeArray<ts.Statement>([ typeParamsDefinition, ...body.statements ]), visitor),
+					ts.visitNodes(ts.createNodeArray<ts.Statement>([ typeParamsDefinition, ...body.statements ]), visitFunctionBodyAndCall),
 					true /* I don't know if it is safe to pass 'body.multiLine'; it likely is but it's marked with @internal in the typescript source and not present in the public types */
 				);
 			}
 			else {
 				// arrow function immediate expression
 				return ts.createBlock(
-					ts.createNodeArray<ts.Statement>([ typeParamsDefinition, ts.createReturn(ts.visitEachChild(body, visitor, context)) ]),
+					ts.createNodeArray<ts.Statement>([ typeParamsDefinition, ts.createReturn(ts.visitNode(body, visitCall)) ]),
 					true,
 				);
 			}
@@ -488,7 +522,7 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 		function visitCallExpression(invocation: ts.CallExpression): ts.Node {
 			const typeArgumentsLiteral = ts.createArrayLiteral(
 				invocation.typeArguments
-					? invocation.typeArguments.map(t => createRuntypeExpressionFromType(checker.getTypeFromTypeNode(t), { baseNode: t, ancestors: [] }))
+					? invocation.typeArguments.map(t => createRuntypeExpressionFromType(checker.getTypeFromTypeNode(t), { baseNode: t }))
 					: []
 			);
 
@@ -515,7 +549,7 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 								"invoked_function",
 							),
 							ts.SyntaxKind.EqualsToken,
-							ts.visitNode(invocation.expression, visitor),
+							ts.visitNode(invocation.expression, visitFunctionBodyAndCall),
 						),
 						ts.SyntaxKind.CommaToken,
 						ts.createBinary(
@@ -534,23 +568,26 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 							"invoked_function",
 						),
 						invocation.typeArguments, // this is probably unnecessary but we'll err on the side of being non-destructive
-						ts.visitNodes(invocation.arguments, visitor),
+						ts.visitNodes(invocation.arguments, visitFunctionBodyAndCall),
 					),
 				),
 			);
 		}
 
-		const visitor: ts.Visitor = (node) => {
+		const visitFunctionBodyAndCall: ts.Visitor = (node) => {
 			// Look into what nodes other than FunctionDeclaration you need to get
-			// From the source it looks like FunctionDeclaration | MethodDeclaration | GetAccessorDeclaration | SetAccessorDeclaration | ConstructorDeclaration | FunctionExpression | ArrowFunction
 			if (isFunctionLikeDeclaration(node.parent) && node === node.parent.body && node.parent.typeParameters !== undefined) {
 				return visitFunctionBody(node as any, node.parent.typeParameters);
 			}
-			// TODO: deafult type parameters
+			return ts.visitNode(node, visitCall);
+		}
+
+		const visitCall: ts.Visitor = (node) => {
+			// TODO: default type parameters
 			if (ts.isCallExpression(node) && node.typeArguments !== undefined) {
 				return visitCallExpression(node);
 			}
-			return ts.visitEachChild(node, visitor, context);
+			return ts.visitEachChild(node, visitFunctionBodyAndCall, context);
 		}
 
 		return (sourceFile: ts.SourceFile): ts.SourceFile => {
@@ -559,7 +596,7 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 			}
 			
 			addRuntypeInjection(sourceFile);
-			return visitor(sourceFile) as ts.SourceFile;
+			return visitFunctionBodyAndCall(sourceFile) as ts.SourceFile;
 		}
 	}
 }
