@@ -5,17 +5,17 @@ import { RuntypeKind } from "./runtype-kind";
 
 // Possible generic solution (sophisticated)
 //  pass type information at runtime through function invocations which require it
-//  monkey patch on a __type_params_stack array and a __next_type_params on each function object
-//  change the function invocations: f<T>(...args) -> (f.__next_type_params = (runtime info of T), f(...args))
+//  monkey patch on a __type_arguments_stack array and a __next_type_arguments on each function object
+//  change the function invocations: f<T>(...args) -> (f.__next_type_arguments = (runtime info of T), f(...args))
 //    Note the comma operator
-//  change the function bodies: { ...statements } -> { f.__type_params_stack.push(f.__next_type_params) ...statements f.__type_params_stack.pop() }
-//  within the function body, the current type parameters can be confidently known to be in the top element of __type_params_stack
+//  change the function bodies: { ...statements } -> { f.__type_arguments_stack.push(f.__next_type_arguments) ...statements f.__type_arguments_stack.pop() }
+//  within the function body, the current type parameters can be confidently known to be in the top element of __type_arguments_stack
 
 // Probably a lot of weird js breaking cases
 //  You may have to pop before any yields and repush after
 //  ofc similar consideration for await
 //  great care needs to be taken in how the runtime type objects themselves are accessed and used
-//  set to a default __next_type_params after using them so if the function is called without it being set (such as from pure js) it still behaves reasonably
+//  set to a default __next_type_arguments after using them so if the function is called without it being set (such as from pure js) it still behaves reasonably
 
 
 function flagStrings(flags: number, enumClass: any) {
@@ -99,7 +99,7 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 			const data = typeParameterData.get(parameterDeclaration)!;
 			
 			return ts.createElementAccess(
-				ts.createIdentifier(`__runtype_type_params_${data.listId}`),
+				ts.createIdentifier(`__runtype_type_arguments_${data.listId}`),
 				data.index,
 			);
 		}
@@ -344,6 +344,16 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 			);
 		}
 
+		function createRuntypeIndexedAccess(type: ts.IndexedAccessType, createContext: CreateRuntypeContext) {
+			return runtypeCreateCall(
+				"createAccessType",
+				[
+					createRuntypeExpressionFromType(type.objectType, createContext),
+					createRuntypeExpressionFromType(type.indexType, createContext),
+				],
+			);
+		}
+
 		interface CreateRuntypeContext {
 			baseNode: ts.Node;
 		}
@@ -422,15 +432,15 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 			}
 			// T[K]
 			if (type.flags & ts.TypeFlags.IndexedAccess) {
-				throw new Error("Indexed access not implemented");
+				return createRuntypeIndexedAccess(type as ts.IndexedAccessType, createContext)
 			}
 			// T extends U ? X : Y
 			if (type.flags & ts.TypeFlags.Conditional) {
 				throw new Error("Conditional types not implemented");
 			}
 			if (type.flags & ts.TypeFlags.Substitution) {
-				// TODO: what is this?
-				throw new Error("substitution not implemented");
+				// Part of conditional types
+				throw new Error("Conditional substitution not implemented");
 			}
 
 			if (type.flags & ts.TypeFlags.TypeParameter) {
@@ -442,7 +452,7 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 		
 		function visitFunctionBody(body: ts.Block | ts.Expression, typeParameters: ts.NodeArray<ts.TypeParameterDeclaration>): ts.Block {
 			const listId = ++currentListId;
-			const typeParamsIdentifier = `__runtype_type_params_${listId}`;
+			const runtypeTypeArgumentsIdentifier = `__runtype_type_arguments_${listId}`;
 			
 			let anyDefaults = false;
 			const typeParameterDefaults = [];
@@ -461,26 +471,26 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 
 			let typeArgumentsExpression: ts.Expression;
 
-			function typeParametersInput() {
+			function runtypeTypeArguments() {
 				return ts.createPropertyAccess(
 					createRuntypeRuntimeReference(),
-					"type_params",
+					"type_arguments",
 				);
 			}
 
 			if (!anyDefaults) {
-				typeArgumentsExpression = typeParametersInput();
+				typeArgumentsExpression = runtypeTypeArguments();
 			}
 			else {
 				typeArgumentsExpression = ts.createArrayLiteral(
 					typeParameterDefaults.map(
 						(paramterDefault, index) => {
 							if (paramterDefault === undefined) {
-								return ts.createElementAccess(typeParametersInput(), index);
+								return ts.createElementAccess(runtypeTypeArguments(), index);
 							}
 							else {
 								return ts.createBinary(
-									ts.createElementAccess(typeParametersInput(), index),
+									ts.createElementAccess(runtypeTypeArguments(), index),
 									ts.SyntaxKind.BarBarToken,
 									paramterDefault,
 								);
@@ -490,12 +500,12 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 				);
 			}
 
-			const typeParamsDefinition = ts.createVariableStatement(
+			const typeArgumentsDefinition = ts.createVariableStatement(
 				undefined,
 				ts.createVariableDeclarationList(
 					[
 						ts.createVariableDeclaration(
-							typeParamsIdentifier,
+							runtypeTypeArgumentsIdentifier,
 							undefined,
 							typeArgumentsExpression,
 						),
@@ -504,16 +514,25 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 				),
 			);
 
+			// We have to set __runtime.type_arguments to [] for proper behavior.
+			// Otherwise subsequent calls with no _explicit_ type parameters can produce incorrect results.
+			const clearRuntypeTypeArguments = ts.createExpressionStatement(
+				ts.createAssignment(
+					runtypeTypeArguments(),
+					ts.createArrayLiteral([]),
+				),
+			);
+
 			if (ts.isBlock(body)) {
 				return ts.createBlock(
-					ts.visitNodes(ts.createNodeArray<ts.Statement>([ typeParamsDefinition, ...body.statements ]), visitFunctionBodyAndCall),
+					ts.createNodeArray<ts.Statement>([ typeArgumentsDefinition, clearRuntypeTypeArguments, ...ts.visitNodes(body.statements, visitorFunctionBodyAndCall) ]),
 					true /* I don't know if it is safe to pass 'body.multiLine'; it likely is but it's marked with @internal in the typescript source and not present in the public types */
 				);
 			}
 			else {
 				// arrow function immediate expression
 				return ts.createBlock(
-					ts.createNodeArray<ts.Statement>([ typeParamsDefinition, ts.createReturn(ts.visitNode(body, visitCall)) ]),
+					ts.createNodeArray<ts.Statement>([ typeArgumentsDefinition, clearRuntypeTypeArguments, ts.createReturn(ts.visitNode(body, visitorCall)) ]),
 					true,
 				);
 			}
@@ -536,9 +555,10 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 			//       but this may not actually be relevent if we choose a good name, and might actually hurt performance, needs to be tested
 			//       maybe also consider implications of explicitely deleting __runtype.invoked_function after the call (or maybe even in the body injection)
 
+
 			// f(args)
 			// ->
-			// (__runtype.invoked_function = ( <function> ), __runtype.type_params=<type-arguments> , __runtype.invoked_function( <function-arguments> ))
+			// (__runtype.invoked_function = ( <function> ), __runtype.type_arguments=<type-arguments> , __runtype.invoked_function( <function-arguments> ))
 
 			return ts.createParen(
 				ts.createBinary(
@@ -549,13 +569,13 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 								"invoked_function",
 							),
 							ts.SyntaxKind.EqualsToken,
-							ts.visitNode(invocation.expression, visitFunctionBodyAndCall),
+							ts.visitNode(invocation.expression, visitorFunctionBodyAndCall),
 						),
 						ts.SyntaxKind.CommaToken,
 						ts.createBinary(
 							ts.createPropertyAccess(
 								createRuntypeRuntimeReference(),
-								"type_params",
+								"type_arguments",
 							),
 							ts.SyntaxKind.EqualsToken,
 							typeArgumentsLiteral,
@@ -568,26 +588,24 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 							"invoked_function",
 						),
 						invocation.typeArguments, // this is probably unnecessary but we'll err on the side of being non-destructive
-						ts.visitNodes(invocation.arguments, visitFunctionBodyAndCall),
+						ts.visitNodes(invocation.arguments, visitorFunctionBodyAndCall),
 					),
 				),
 			);
 		}
 
-		const visitFunctionBodyAndCall: ts.Visitor = (node) => {
-			// Look into what nodes other than FunctionDeclaration you need to get
+		const visitorFunctionBodyAndCall: ts.Visitor = (node) => {
 			if (isFunctionLikeDeclaration(node.parent) && node === node.parent.body && node.parent.typeParameters !== undefined) {
 				return visitFunctionBody(node as any, node.parent.typeParameters);
 			}
-			return ts.visitNode(node, visitCall);
+			return ts.visitNode(node, visitorCall);
 		}
 
-		const visitCall: ts.Visitor = (node) => {
-			// TODO: default type parameters
-			if (ts.isCallExpression(node) && node.typeArguments !== undefined) {
+		const visitorCall: ts.Visitor = (node) => {
+			if (ts.isCallExpression(node) && node.typeArguments !== undefined && node.typeArguments.length > 0) {
 				return visitCallExpression(node);
 			}
-			return ts.visitEachChild(node, visitFunctionBodyAndCall, context);
+			return ts.visitEachChild(node, visitorFunctionBodyAndCall, context);
 		}
 
 		return (sourceFile: ts.SourceFile): ts.SourceFile => {
@@ -596,7 +614,7 @@ function runtypeTransformer(checker: ts.TypeChecker) {
 			}
 			
 			addRuntypeInjection(sourceFile);
-			return visitFunctionBodyAndCall(sourceFile) as ts.SourceFile;
+			return visitorFunctionBodyAndCall(sourceFile) as ts.SourceFile;
 		}
 	}
 }

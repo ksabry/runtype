@@ -731,6 +731,8 @@ class ObjectType implements RuntypeBase {
 
 		// TODO: consider checking for missing properties in a seperate loop to find all of them regardless of if an InvalidPropertyError occurs
 
+		console.log(this);
+
 		for (const { key, keyKind, value: valueType, optional } of this.properties) {
 			const unescaped = unescapePropertyKey(key, keyKind);
 			if (!(unescaped in value)) {
@@ -1396,16 +1398,73 @@ function getObjectKeyTypes(type: ObjectType) {
 | AccessType |
 \*----------*/
 
-// Needs to be redone
+export function createAccessType(type: RuntypeBase, keyType: RuntypeBase): RuntypeBase {
+	// TODO: unique symbols
+	if (!isValidAccessKeyType(keyType)) {
+		// TODO: error type;
+		throw new Error("Invalid key type for access type");
+	}
+	return createAccessTypeHelper(type, keyType) as any;
+}
+
+function createAccessTypeHelper(type: RuntypeBase, keyType: RuntypeBase): RuntypeBase {
+	if (type.kind === RuntypeKind.Any) {
+		return createAnyType();
+	}
+	if (type.kind === RuntypeKind.Never || keyType.kind === RuntypeKind.Never) {
+		return createNeverType();
+	}
+	if (keyType.kind === RuntypeKind.Any) {
+		throw new Error("Invalid key for access type: 'any'");
+	}
+
+	if (
+		type.kind === RuntypeKind.Unknown ||
+		type.kind === RuntypeKind.Void ||
+		type.kind === RuntypeKind.Undefined ||
+		type.kind === RuntypeKind.Null ||
+		type.kind === RuntypeKind.NonPrimitive
+	) {
+		throw new Error("Invalid access type");
+	}
+
+	// For access types we defer primitives to their boxed versions
+	const boxed = getBoxedPrimitive(type);
+	if (boxed) {
+		type = boxed as any;
+	}
+	
+	if (
+		keyType.kind === RuntypeKind.StringLiteral ||
+		keyType.kind === RuntypeKind.NumberLiteral
+	) {
+		return createAccessTypeWithLiteralKey(type, (keyType as StringLiteralType | NumberLiteralType).literal);
+	}
+	if (keyType.kind === RuntypeKind.String) {
+		return createAccessTypeWithStringKey(type);
+	}
+	if (keyType.kind === RuntypeKind.Number) {
+		return createAccessTypeWithNumberKey(type);
+	}
+
+	if (keyType.kind === RuntypeKind.Union) {
+		return createUnionType((keyType as UnionType).types.map(t => createAccessTypeHelper(type, t)));
+	}
+	if (keyType.kind === RuntypeKind.Intersection) {
+		return createIntersectionType((keyType as IntersectionType).types.map(t => createAccessTypeHelper(type, t)));
+	}
+
+	throw new Error("Unrecognized arguments to createAccessType");
+}
 
 function isValidAccessKeyType(keyType: RuntypeBase) {
 	if (
+		keyType.kind === RuntypeKind.Any ||
 		keyType.kind === RuntypeKind.Never ||
 		keyType.kind === RuntypeKind.String ||
 		keyType.kind === RuntypeKind.Number ||
 		keyType.kind === RuntypeKind.StringLiteral ||
 		keyType.kind === RuntypeKind.NumberLiteral
-		// TODO: symbol
 	) {
 		return true;
 	}
@@ -1434,13 +1493,18 @@ function isValidAccessKeyType(keyType: RuntypeBase) {
 function createAccessTypeWithLiteralKey(type: RuntypeBase, key: string | number): RuntypeBase {
 	// TODO: unique symbols
 	if (type.kind === RuntypeKind.Object) {
-		for (const { key: propertyKey, value } of (type as ObjectType).properties) {
+		// readonly key: string;
+		// readonly keyKind: RuntypeKind.String | RuntypeKind.Number | RuntypeKind.Symbol;
+		// readonly value: RuntypeBase;
+		// readonly optional: boolean;
+	
+		for (const { key: propertyKey, keyKind: propertyKeyKind,  value: propertyValue } of (type as ObjectType).properties) {
 			// TODO: symbols
-			if (typeof key === "symbol") {
+			if (propertyKeyKind === RuntypeKind.Symbol) {
 				continue;
 			}
-			if (key.toString() === propertyKey.toString()) {
-				return value;
+			if (key.toString() === unescapePropertyKey(propertyKey, propertyKeyKind).toString()) {
+				return propertyValue;
 			}
 		}
 
@@ -1503,61 +1567,4 @@ function createAccessTypeWithNumberKey(type: RuntypeBase): RuntypeBase {
 
 	throw new Error(`Unrecognized access type; kind is ${type.kind}`);
 
-}
-
-function createAccessTypeHelper(type: RuntypeBase, keyType: RuntypeBase): RuntypeBase {
-	if (keyType.kind === RuntypeKind.Never) {
-		return createNeverType();
-	}
-
-	if (type.kind === RuntypeKind.Never) {
-		return createNeverType();
-	}
-	if (type.kind === RuntypeKind.Any) {
-		return createAnyType();
-	}
-	if (
-		type.kind === RuntypeKind.Undefined ||
-		type.kind === RuntypeKind.Null ||
-		type.kind === RuntypeKind.NonPrimitive ||
-		type.kind === RuntypeKind.Void ||
-		type.kind === RuntypeKind.Unknown
-	) {
-		throw new Error("Invalid key for access type");
-	}
-
-	if (
-		keyType.kind === RuntypeKind.StringLiteral ||
-		keyType.kind === RuntypeKind.NumberLiteral
-	) {
-		return createAccessTypeWithLiteralKey(type, (keyType as StringLiteralType | NumberLiteralType).literal);
-	}
-	if (keyType.kind === RuntypeKind.String) {
-		return createAccessTypeWithStringKey(type);
-	}
-	if (keyType.kind === RuntypeKind.Number) {
-		return createAccessTypeWithNumberKey(type);
-	}
-
-	if (keyType.kind === RuntypeKind.Union) {
-		return createUnionType((keyType as UnionType).types.map(t => createAccessTypeHelper(type, t)));
-	}
-	if (keyType.kind === RuntypeKind.Intersection) {
-		return createIntersectionType((keyType as IntersectionType).types.map(t => createAccessTypeHelper(type, t)));
-	}
-
-	throw new Error("Invalid access key type");
-}
-
-export function createAccessType(type: RuntypeBase, keyType: RuntypeBase): RuntypeBase {
-	if (!isValidAccessKeyType(keyType)) {
-		// TODO: error type;
-		throw new Error("Invalid key type for access type");
-	}
-	// For access types we defer primitives to their boxed versions
-	const boxed = getBoxedPrimitive(type);
-	if (boxed) {
-		type = boxed as any;
-	}
-	return createAccessTypeHelper(type, keyType) as any;
 }

@@ -5,7 +5,7 @@ export * from "./injection";
 export * from "./runtype";
 
 export function runtype<T>(): Runtype<T> {
-	return __runtime.type_params[0];
+	return __runtime.type_arguments[0];
 }
 
 export function runtypeParameterized< F extends ()=>unknown, R extends RuntypeBase = RuntypeBase >(...params: RuntypeBase[]): R {

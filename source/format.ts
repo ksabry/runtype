@@ -5,14 +5,14 @@ function logType<T>() {
 	console.log(rt);
 }
 
-function checkType<T>(value: unknown) {
+function checkType<T extends { [key: string]: unknown }>(value: unknown) {
 	console.log("========================");
 
 	const rt = runtype<T>();
-	const keyofRt = runtype<keyof T>();
+	const accessRt = runtype<T["1"]>();
 
 	console.log(rt);
-	console.log(keyofRt);
+	console.log(accessRt);
 	console.log(value);
 
 	const validation = rt.validate(value);
@@ -24,14 +24,16 @@ function checkType<T>(value: unknown) {
 	}
 }
 
-const exp = <A, T = string, U = string>() => runtype<U>();
+const testSymbol = Symbol("test");
 
 interface Test {
-	field: string;
+	a: 123;
+	[key: number]: 10;
+	[key: string]: number;
 }
 
-console.log(exp<number, number>());
-console.log(exp<number, number, number>());
+checkType<Test>({ test: 1 });
+
 // checkType<{ a: string, b: string, c: string }>({ b: 10 });
 
 // export function symbolName(symbol: Symbol): string {
