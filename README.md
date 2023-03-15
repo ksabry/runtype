@@ -1,3 +1,3 @@
 # runtype
 
-Runtime type checking for TypeScript. Works by injecting runtime checks.
+Runtime type checking for TypeScript. Works by statically analysing TypeScript types and injecting the relevent code.
